@@ -239,8 +239,8 @@ bool Receiver::ExecuteDMAJobsRead() {
 
     /* On DOCA_SUCCESS, Verify DMA job result */
     if (event.result.u64 == DOCA_SUCCESS) {
-        DOCA_LOG_INFO("Remote DMA copy was done Successfully");
-        DOCA_LOG_INFO("Memory content: %s", dst_buffer);
+        //DOCA_LOG_INFO("Remote DMA copy was done Successfully");
+        //DOCA_LOG_INFO("Memory content: %s", dst_buffer);
     } else {
         DOCA_LOG_ERR("DMA job returned unsuccessfully");
         res = DOCA_ERROR_UNKNOWN;
@@ -298,8 +298,8 @@ bool Receiver::ExecuteDMAJobsWrite() {
 
     /* On DOCA_SUCCESS, Verify DMA job result */
     if (event.result.u64 == DOCA_SUCCESS) {
-        DOCA_LOG_INFO("Remote DMA copy was done Successfully");
-        DOCA_LOG_INFO("Memory content: %s", dst_buffer);
+        //DOCA_LOG_INFO("Remote DMA copy was done Successfully");
+        //DOCA_LOG_INFO("Memory content: %s", dst_buffer);
     } else {
         DOCA_LOG_ERR("DMA job returned unsuccessfully");
         res = DOCA_ERROR_UNKNOWN;

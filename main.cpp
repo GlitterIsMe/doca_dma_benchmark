@@ -6,6 +6,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <doca_dev.h>
+#include <chrono>
 
 #include "receiver.h"
 #include "sender.h"
@@ -54,8 +55,14 @@ int main(int argc, char** argv) {
         pci_bdf.device = 0x00;
         pci_bdf.function = 0x0;
         auto receiver = new Receiver(&pci_bdf, "45678");
+        auto start = std::chrono::high_resolution_clock::now();
         receiver->ExecuteDMAJobsRead();
+        auto end1 = std::chrono::high_resolution_clock::now();
         receiver->ExecuteDMAJobsWrite();
+        auto end2 = std::chrono::high_resolution_clock::now();
+        uint64_t dma_read_lat = std::chrono::duration_cast<std::chrono::microseconds>(end1 - start).count();
+        uint64_t dma_write_lat = std::chrono::duration_cast<std::chrono::microseconds>(end2 - end1).count();
+        printf("DMA Read lat: %lu us\nDMA Write lat: %lu us\n", dma_read_lat, dma_write_lat);
         delete receiver;
     }
     return 0;
