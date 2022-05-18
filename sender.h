@@ -7,7 +7,11 @@
 
 class Sender {
 public:
-    explicit Sender(struct doca_pci_bdf *pcie_addr, char *src_buffer, size_t length, char *receiver_ip, uint16_t receiver_port) {
+    explicit Sender(struct doca_pci_bdf *pcie_addr,
+            char *src_buffer, size_t length,
+            char *receiver_ip, uint16_t receiver_port,
+            int core_num) {
+        total_core_num = core_num;
         init_sender(pcie_addr, src_buffer, length, receiver_ip, receiver_port);
     }
 
@@ -26,6 +30,8 @@ private:
     app_state state = {0};
     int sender_fd;
     char *export_str;
+
+    int total_core_num;
 };
 
 #endif //DOCA_DMA_SENDER_H

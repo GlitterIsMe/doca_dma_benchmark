@@ -18,6 +18,11 @@
 
 DOCA_LOG_REGISTER(DMA_REMOTE_COPY_RECEIVER);
 
+char Receiver::export_json[1024] = {0};
+char* Receiver::remote_addr = 0;
+size_t Receiver::remote_addr_len = 0;
+int Receiver::exit_count = 0;
+
 Receiver::~Receiver() {
     if (doca_buf_refcount_rm(dst_doca_buf, NULL))
         DOCA_LOG_ERR("Failed to decrease DOCA buffer reference count");
@@ -115,22 +120,26 @@ bool Receiver::receive_json_from_sender(const char *port, char *export_buffer, s
 }
 
 void Receiver::send_ack_to_sender() const {
-    int ret;
-    char ack_buffer[] = "DMA operation on receiver node was completed";
-    int length = strlen(ack_buffer) + 1;
+    exit_count--;
+    if (exit_count == 0) {
+        int ret;
+        char ack_buffer[] = "DMA operation on receiver node was completed";
+        int length = strlen(ack_buffer) + 1;
 
-    ret = write(sender_fd, ack_buffer, length);
-    if (ret != length)
-        DOCA_LOG_ERR("Failed to send ack message to sender node");
+        printf("[%d]: send_ack_to_sender\n", core_id);
+        ret = write(sender_fd, ack_buffer, length);
+        if (ret != length)
+            DOCA_LOG_ERR("Failed to send ack message to sender node");
 
-    close(sender_fd);
+        close(sender_fd);
+    }
 }
 
 doca_error_t Receiver::init_receiver(struct doca_pci_bdf *pcie_addr, const char *port) {
     doca_error_t res;
     uint32_t max_chunks = 1;
     uint32_t pg_sz = 1024 * 4;
-    char export_json[1024] = {0};
+    //char export_json[1024] = {0};
 
     res = open_local_device(pcie_addr, &state);
     if (res != DOCA_SUCCESS)
@@ -156,13 +165,15 @@ doca_error_t Receiver::init_receiver(struct doca_pci_bdf *pcie_addr, const char 
         return res;
     }
 
-    /* Receive exported data from sender */
-    if (!receive_json_from_sender(port, export_json, sizeof(export_json) / sizeof(char))) {
-        cleanup_core_objects(&state);
-        destroy_core_objects(&state);
-        return DOCA_ERROR_NOT_CONNECTED;
+    if (core_id == 0) {
+        /* Receive exported data from sender */
+        if (!receive_json_from_sender(port, export_json, sizeof(export_json) / sizeof(char))) {
+            cleanup_core_objects(&state);
+            destroy_core_objects(&state);
+            return DOCA_ERROR_NOT_CONNECTED;
+        }
+        exit_count = total_core_num;
     }
-
     /* Create a local DOCA mmap from exported data */
     res = doca_mmap_create_from_export("my_mmap", (uint8_t *) export_json, strlen(export_json) + 1, state.dev,
                                        &remote_mmap);
@@ -188,7 +199,7 @@ doca_error_t Receiver::init_receiver(struct doca_pci_bdf *pcie_addr, const char 
 
 char *Receiver::get_random_remote_block() {
     int rand_blk = rand();
-    return remote_addr + (rand_blk % total_blocks) * block_size;
+    return local_remote_addr + (rand_blk % total_blocks) * block_size;
 }
 
 char *Receiver::get_remote_block(int blk_num, bool random) {
@@ -196,7 +207,7 @@ char *Receiver::get_remote_block(int blk_num, bool random) {
     if (random) {
         blk_no = hash::hash_funcs[0](&blk_no, sizeof(int), f_seed);
     }
-    return remote_addr + (blk_no % total_blocks) * block_size;
+    return local_remote_addr + (blk_no % total_blocks) * block_size;
 }
 
 bool Receiver::ExecuteDMAJobsRead() {

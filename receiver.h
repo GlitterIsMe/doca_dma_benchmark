@@ -14,12 +14,17 @@
 
 class Receiver {
 public:
-    explicit Receiver (struct doca_pci_bdf *pcie_addr, const char *port, size_t blk_size, int depth) : block_size(blk_size) {
+    explicit Receiver (struct doca_pci_bdf *pcie_addr,
+            const char *port, size_t blk_size, int depth,
+            int core_num, int id) : block_size(blk_size) {
         dst_buffer = new char[block_size];
         dst_buffer_len = block_size;
-        init_receiver(pcie_addr, port);
-        total_blocks = remote_addr_len / block_size;
+        total_core_num = core_num;
+        core_id = id;
         dma_jobs = new struct doca_dma_job_memcpy[depth];
+        init_receiver(pcie_addr, port);
+        total_blocks = remote_addr_len / total_core_num / block_size;
+        local_remote_addr = remote_addr + (remote_addr_len / total_core_num * core_id);
     }
 
     ~Receiver();
@@ -53,14 +58,21 @@ private:
 
     struct doca_buf *dst_doca_buf;
 
-    char* remote_addr;
-    size_t remote_addr_len;
+    static char export_json[1024];
+    static char* remote_addr;
+    static size_t remote_addr_len;
+    char* local_remote_addr;
 
     char* dst_buffer;
     size_t dst_buffer_len;
 
     const size_t block_size {64};
     size_t total_blocks;
+
+    int total_core_num;
+    int core_id;
+
+    static int exit_count;
 };
 
 #endif //DOCA_DMA_RECEIVER_H

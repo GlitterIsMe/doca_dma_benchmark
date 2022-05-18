@@ -25,6 +25,7 @@ bool Sender::WaitingForExit() {
     char exp_ack[] = "DMA operation on receiver node was completed";
     /* Waiting for DMA completion signal from receiver */
     DOCA_LOG_INFO("Waiting for receiver node to acknowledge DMA operation was ended");
+
     if (recv(sender_fd, ack_buffer, sizeof(ack_buffer), 0) < 0) {
         DOCA_LOG_ERR("Failed to receive ack message");
         close(sender_fd);
@@ -36,15 +37,13 @@ bool Sender::WaitingForExit() {
         close(sender_fd);
         return false;
     }
-
-    DOCA_LOG_INFO("Ack message was received, closing memory mapping");
+    DOCA_LOG_INFO("All ack message was received, closing memory mapping");
 
     close(sender_fd);
     return true;
 }
 
-bool Sender::send_json_to_receiver(char *ip, uint16_t port, char *export_str, size_t export_str_len)
-{
+bool Sender::send_json_to_receiver(char *ip, uint16_t port, char *export_str, size_t export_str_len) {
     struct sockaddr_in addr;
     struct timeval timeout = {
             .tv_sec = 5,
@@ -61,13 +60,13 @@ bool Sender::send_json_to_receiver(char *ip, uint16_t port, char *export_str, si
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);
 
-    if (connect(sender_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+    if (connect(sender_fd, (struct sockaddr *) &addr, sizeof(addr)) < 0) {
         DOCA_LOG_ERR("Couldn't establish a connection to receiver node");
         close(sender_fd);
         return false;
     }
     ret = write(sender_fd, export_str, export_str_len);
-    if (ret != (int)export_str_len) {
+    if (ret != (int) export_str_len) {
         DOCA_LOG_ERR("Failed to send data to receiver node");
         close(sender_fd);
         return false;
@@ -93,8 +92,8 @@ bool Sender::send_json_to_receiver(char *ip, uint16_t port, char *export_str, si
     return true;
 }
 
-doca_error_t Sender::init_sender (struct doca_pci_bdf *pcie_addr, char *src_buffer, size_t length, char *receiver_ip, uint16_t receiver_port)
-{
+doca_error_t Sender::init_sender(struct doca_pci_bdf *pcie_addr, char *src_buffer, size_t length, char *receiver_ip,
+                                 uint16_t receiver_port) {
     //struct app_state state = {0};
     doca_error_t res;
     //char *export_str;
@@ -118,7 +117,7 @@ doca_error_t Sender::init_sender (struct doca_pci_bdf *pcie_addr, char *src_buff
     }
 
     /* Export DOCA mmap to enable DMA */
-    res = doca_mmap_export(state.mmap, state.dev, (uint8_t **)&export_str, &export_str_len);
+    res = doca_mmap_export(state.mmap, state.dev, (uint8_t **) &export_str, &export_str_len);
     if (res != DOCA_SUCCESS) {
         destroy_core_objects_sender(&state);
         return res;
