@@ -9,6 +9,8 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <chrono>
+
 #include "dma_common.h"
 #include "receiver.h"
 #include "hash.h"
@@ -263,6 +265,7 @@ bool Receiver::ExecuteDMAJobsRead(int blk_num, bool random) {
     doca_error_t res;
     struct doca_buf *src_doca_buf;
     /* Construct DOCA buffer for each address range */
+    auto t1 = std::chrono::high_resolution_clock::now();
     char* target_remote_buffer = get_remote_block(blk_num, random);
     res = doca_buf_inventory_buf_by_addr(state.buf_inv,
                                          remote_mmap,
@@ -274,6 +277,7 @@ bool Receiver::ExecuteDMAJobsRead(int blk_num, bool random) {
                                          remote_addr,
                                          remote_addr_len,
                                          &src_doca_buf);*/
+    auto t2 = std::chrono::high_resolution_clock::now();
     if (res != DOCA_SUCCESS) {
         DOCA_LOG_ERR("Unable to acquire DOCA buffer representing remote buffer: %s", doca_get_error_string(res));
         doca_mmap_destroy(remote_mmap);
@@ -303,11 +307,13 @@ bool Receiver::ExecuteDMAJobsRead(int blk_num, bool random) {
         destroy_core_objects(&state);
         return false;
     }
+    auto t3 = std::chrono::high_resolution_clock::now();
     /* Wait for job completion */
     while ((res = doca_workq_progress_retrieve(state.workq, &event, DOCA_WORKQ_RETRIEVE_FLAGS_NONE)) ==
            DOCA_ERROR_AGAIN) {
         /* Do nothing */
     }
+    auto t4 = std::chrono::high_resolution_clock::now();
     if (res != DOCA_SUCCESS)
         DOCA_LOG_ERR("Failed to submit DMA job: %s", doca_get_error_string(res));
 
@@ -320,6 +326,15 @@ bool Receiver::ExecuteDMAJobsRead(int blk_num, bool random) {
         res = DOCA_ERROR_UNKNOWN;
     }
     doca_buf_refcount_rm(src_doca_buf, NULL);
+    auto t5 = std::chrono::high_resolution_clock::now();
+    uint64_t time_buffer = std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count();
+    uint64_t time_submit = std::chrono::duration_cast<std::chrono::microseconds>(t3 - t2).count();
+    uint64_t time_poll = std::chrono::duration_cast<std::chrono::microseconds>(t4 - t3).count();
+    uint64_t time_check = std::chrono::duration_cast<std::chrono::microseconds>(t5 - t4).count();
+    printf("Read time break: init[%lu us]\tsubmit[%lu us]\tpoll[%lu us]\tcheck[%lu us]\n", time_buffer,
+           time_submit,
+           time_poll,
+           time_check);
     return true;
 }
 
