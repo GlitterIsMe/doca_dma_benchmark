@@ -26,6 +26,7 @@ DEFINE_int64(block_size, 64, "The size of each IO");
 DEFINE_int64(ops, 100, "Total number of operations");
 DEFINE_bool(random, true, "Perform random IO or not");
 DEFINE_string(benchmarks, "read", "The type of benchmarks");
+DEFINE_int32(depth, 32, "The size of DMA queue");
 
 int main(int argc, char** argv) {
     google::ParseCommandLineFlags(&argc, &argv, false);
@@ -69,18 +70,20 @@ int main(int argc, char** argv) {
         pci_bdf.bus = 0x03;
         pci_bdf.device = 0x00;
         pci_bdf.function = 0x0;
-        auto receiver = new Receiver(&pci_bdf, "45678", FLAGS_block_size);
+        auto receiver = new Receiver(&pci_bdf, "45678", FLAGS_block_size, FLAGS_depth);
         auto hist = leveldb::Histogram();
         if (FLAGS_benchmarks == "read") {
-            for (int i = 0; i < FLAGS_ops; ++i) {
-                auto start = std::chrono::high_resolution_clock::now();
-                receiver->ExecuteDMAJobsRead(i, FLAGS_random);
-                auto end1 = std::chrono::high_resolution_clock::now();
-                std::chrono::duration<double, std::micro> dma_read_lat = end1 - start;
+            auto start = std::chrono::high_resolution_clock::now();
+            for (int i = 0; i < FLAGS_ops; i = i + FLAGS_depth) {
+                receiver->ExecuteDMAJobsReadMulti(i, FLAGS_random, FLAGS_depth);
                 //printf("%lf\n", dma_read_lat.count());
-                hist.Add(dma_read_lat.count());
+                //hist.Add(dma_read_lat.count());
             }
-            printf("DMA random read lat: %s\n", hist.ToString().c_str());
+            auto end1 = std::chrono::high_resolution_clock::now();
+            std::chrono::duration<double, std::micro> dma_read_lat = end1 - start;
+            printf("Finish %d ops with %d B blocks in %lf s\n", FLAGS_ops, FLAGS_block_size, dma_read_lat.count() / 1000000);
+            printf("DMA %s read throughput: %lf KOPS\n", FLAGS_random ? "random" : "sequential", FLAGS_ops / dma_read_lat.count() * 1000000 / 1000);
+            printf("DMA %s read bandwidth: %lf MB/s\n", FLAGS_random ? "random" : "sequential", FLAGS_ops * FLAGS_block_size / 1024.0 / 1024.0 / dma_read_lat.count() * 1000000 / 1000);
         } else if (FLAGS_benchmarks == "write") {
             for (int i = 0; i < FLAGS_ops; ++i) {
                 auto end1 = std::chrono::high_resolution_clock::now();

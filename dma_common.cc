@@ -63,7 +63,7 @@ create_core_objects(struct app_state *state) {
         return res;
     }
 
-    res = doca_buf_inventory_create("my_inventory", 2, DOCA_BUF_EXTENSION_NONE, &state->buf_inv);
+    res = doca_buf_inventory_create("my_inventory", 33, DOCA_BUF_EXTENSION_NONE, &state->buf_inv);
     if (res != DOCA_SUCCESS) {
         DOCA_LOG_ERR("Unable to create buffer inventory: %s", doca_get_error_string(res));
         return res;

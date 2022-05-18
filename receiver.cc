@@ -34,6 +34,8 @@ Receiver::~Receiver() {
     destroy_core_objects(&state);
 
     delete[] dst_buffer;
+
+    delete[] dma_jobs;
 }
 
 bool Receiver::receive_json_from_sender(const char *port, char *export_buffer, size_t export_buffer_len) {
@@ -265,7 +267,6 @@ bool Receiver::ExecuteDMAJobsRead(int blk_num, bool random) {
     doca_error_t res;
     struct doca_buf *src_doca_buf;
     /* Construct DOCA buffer for each address range */
-    auto t1 = std::chrono::high_resolution_clock::now();
     char* target_remote_buffer = get_remote_block(blk_num, random);
     res = doca_buf_inventory_buf_by_addr(state.buf_inv,
                                          remote_mmap,
@@ -277,7 +278,6 @@ bool Receiver::ExecuteDMAJobsRead(int blk_num, bool random) {
                                          remote_addr,
                                          remote_addr_len,
                                          &src_doca_buf);*/
-    auto t2 = std::chrono::high_resolution_clock::now();
     if (res != DOCA_SUCCESS) {
         DOCA_LOG_ERR("Unable to acquire DOCA buffer representing remote buffer: %s", doca_get_error_string(res));
         doca_mmap_destroy(remote_mmap);
@@ -307,13 +307,11 @@ bool Receiver::ExecuteDMAJobsRead(int blk_num, bool random) {
         destroy_core_objects(&state);
         return false;
     }
-    auto t3 = std::chrono::high_resolution_clock::now();
     /* Wait for job completion */
     while ((res = doca_workq_progress_retrieve(state.workq, &event, DOCA_WORKQ_RETRIEVE_FLAGS_NONE)) ==
            DOCA_ERROR_AGAIN) {
         /* Do nothing */
     }
-    auto t4 = std::chrono::high_resolution_clock::now();
     if (res != DOCA_SUCCESS)
         DOCA_LOG_ERR("Failed to submit DMA job: %s", doca_get_error_string(res));
 
@@ -326,15 +324,77 @@ bool Receiver::ExecuteDMAJobsRead(int blk_num, bool random) {
         res = DOCA_ERROR_UNKNOWN;
     }
     doca_buf_refcount_rm(src_doca_buf, NULL);
-    auto t5 = std::chrono::high_resolution_clock::now();
-    uint64_t time_buffer = std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count();
-    uint64_t time_submit = std::chrono::duration_cast<std::chrono::microseconds>(t3 - t2).count();
-    uint64_t time_poll = std::chrono::duration_cast<std::chrono::microseconds>(t4 - t3).count();
-    uint64_t time_check = std::chrono::duration_cast<std::chrono::microseconds>(t5 - t4).count();
-    printf("Read time break: init[%lu us]\tsubmit[%lu us]\tpoll[%lu us]\tcheck[%lu us]\n", time_buffer,
-           time_submit,
-           time_poll,
-           time_check);
+    return true;
+}
+
+bool Receiver::ExecuteDMAJobsReadMulti(int blk_num, bool random, int nums) {
+    doca_error_t res;
+    struct doca_buf **src_doca_bufs = new struct doca_buf*[nums];
+    struct doca_job* doca_job = new struct doca_job[nums];
+    for (int i = 0; i < nums; ++i) {
+        /* Construct DOCA buffer for each address range */
+        char* target_remote_buffer = get_remote_block(blk_num + i, random);
+        res = doca_buf_inventory_buf_by_addr(state.buf_inv,
+                                             remote_mmap,
+                                             target_remote_buffer,
+                                             block_size,
+                                             &src_doca_bufs[i]);
+        if (res != DOCA_SUCCESS) {
+            DOCA_LOG_ERR("Unable to acquire DOCA buffer representing remote buffer: %s", doca_get_error_string(res));
+            doca_mmap_destroy(remote_mmap);
+            cleanup_core_objects(&state);
+            destroy_core_objects(&state);
+            return res;
+        }
+
+        /* Construct DMA job */
+        doca_job[i].type = DOCA_DMA_JOB_MEMCPY;
+        doca_job[i].flags = DOCA_JOB_FLAGS_NONE;
+        doca_job[i].ctx = state.ctx;
+
+        dma_jobs[i].base = doca_job[i];
+        dma_jobs[i].dst_buff = dst_doca_buf;
+        dma_jobs[i].src_buff = src_doca_bufs[i];
+        dma_jobs[i].num_bytes_to_copy = dst_buffer_len;
+    }
+
+    /* Enqueue DMA job */
+    for (int i = 0; i < nums; ++i) {
+        res = doca_workq_submit(state.workq, &dma_jobs[i].base);
+        if (res != DOCA_SUCCESS) {
+            DOCA_LOG_ERR("Failed to submit DMA job: %s", doca_get_error_string(res));
+            doca_buf_refcount_rm(dst_doca_buf, NULL);
+            doca_buf_refcount_rm(src_doca_bufs[i], NULL);
+            doca_mmap_destroy(remote_mmap);
+            cleanup_core_objects(&state);
+            destroy_core_objects(&state);
+            return false;
+        }
+    }
+
+    /* Wait for job completion */
+    int total_completed = 0;
+    for (int i = 0; total_completed < nums; ++i) {
+        while ((res = doca_workq_progress_retrieve(state.workq, &event, DOCA_WORKQ_RETRIEVE_FLAGS_NONE)) ==
+               DOCA_ERROR_AGAIN) {
+            /* Do nothing */
+        }
+        if (res != DOCA_SUCCESS)
+            DOCA_LOG_ERR("Failed to submit DMA job: %s", doca_get_error_string(res));
+
+        /* On DOCA_SUCCESS, Verify DMA job result */
+        if (event.result.u64 == DOCA_SUCCESS) {
+            //DOCA_LOG_INFO("Remote DMA copy was done Successfully");
+            //DOCA_LOG_INFO("Memory content: %s", dst_buffer);
+        } else {
+            DOCA_LOG_ERR("DMA job returned unsuccessfully");
+            res = DOCA_ERROR_UNKNOWN;
+        }
+        doca_buf_refcount_rm(src_doca_bufs[i], NULL);
+        total_completed++;
+    }
+    delete[] src_doca_bufs;
+    delete[] doca_job;
     return true;
 }
 

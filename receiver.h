@@ -14,11 +14,12 @@
 
 class Receiver {
 public:
-    explicit Receiver (struct doca_pci_bdf *pcie_addr, const char *port, size_t blk_size) : block_size(blk_size) {
+    explicit Receiver (struct doca_pci_bdf *pcie_addr, const char *port, size_t blk_size, int depth) : block_size(blk_size) {
         dst_buffer = new char[block_size];
         dst_buffer_len = block_size;
         init_receiver(pcie_addr, port);
         total_blocks = remote_addr_len / block_size;
+        dma_jobs = new struct doca_dma_job_memcpy[depth];
     }
 
     ~Receiver();
@@ -26,6 +27,8 @@ public:
     bool ExecuteDMAJobsRead();
 
     bool ExecuteDMAJobsRead(int blk_num, bool random);
+
+    bool ExecuteDMAJobsReadMulti(int blk_num, bool random, int nums);
 
     bool ExecuteDMAJobsWrite();
 
@@ -44,6 +47,7 @@ private:
     int sender_fd;
 
     struct doca_event event = {0};
+    struct doca_dma_job_memcpy* dma_jobs = nullptr;
     struct doca_dma_job_memcpy dma_job = {0};
     struct doca_mmap *remote_mmap;
 
