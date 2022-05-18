@@ -11,6 +11,8 @@
 
 #include "dma_common.h"
 #include "receiver.h"
+#include "hash.h"
+#define f_seed 0xc70697UL
 
 DOCA_LOG_REGISTER(DMA_REMOTE_COPY_RECEIVER);
 
@@ -185,11 +187,83 @@ char *Receiver::get_random_remote_block() {
     return remote_addr + (rand_blk % total_blocks) * block_size;
 }
 
+char *Receiver::get_remote_block(int blk_num, bool random) {
+    unsigned int blk_no = blk_num;
+    if (random) {
+        blk_no = hash::hash_funcs[0](&blk_no, sizeof(int), f_seed);
+    }
+    return remote_addr + (blk_no % total_blocks) * block_size;
+}
+
 bool Receiver::ExecuteDMAJobsRead() {
     doca_error_t res;
     struct doca_buf *src_doca_buf;
     /* Construct DOCA buffer for each address range */
     char* target_remote_buffer = get_random_remote_block();
+    res = doca_buf_inventory_buf_by_addr(state.buf_inv,
+                                         remote_mmap,
+                                         target_remote_buffer,
+                                         block_size,
+                                         &src_doca_buf);
+    /*res = doca_buf_inventory_buf_by_addr(state.buf_inv,
+                                         remote_mmap,
+                                         remote_addr,
+                                         remote_addr_len,
+                                         &src_doca_buf);*/
+    if (res != DOCA_SUCCESS) {
+        DOCA_LOG_ERR("Unable to acquire DOCA buffer representing remote buffer: %s", doca_get_error_string(res));
+        doca_mmap_destroy(remote_mmap);
+        cleanup_core_objects(&state);
+        destroy_core_objects(&state);
+        return res;
+    }
+
+    struct doca_job doca_job = {0};
+    /* Construct DMA job */
+    doca_job.type = DOCA_DMA_JOB_MEMCPY;
+    doca_job.flags = DOCA_JOB_FLAGS_NONE;
+    doca_job.ctx = state.ctx;
+
+    dma_job.base = doca_job;
+    dma_job.dst_buff = dst_doca_buf;
+    dma_job.src_buff = src_doca_buf;
+    dma_job.num_bytes_to_copy = dst_buffer_len;
+    /* Enqueue DMA job */
+    res = doca_workq_submit(state.workq, &dma_job.base);
+    if (res != DOCA_SUCCESS) {
+        DOCA_LOG_ERR("Failed to submit DMA job: %s", doca_get_error_string(res));
+        doca_buf_refcount_rm(dst_doca_buf, NULL);
+        doca_buf_refcount_rm(src_doca_buf, NULL);
+        doca_mmap_destroy(remote_mmap);
+        cleanup_core_objects(&state);
+        destroy_core_objects(&state);
+        return false;
+    }
+    /* Wait for job completion */
+    while ((res = doca_workq_progress_retrieve(state.workq, &event, DOCA_WORKQ_RETRIEVE_FLAGS_NONE)) ==
+           DOCA_ERROR_AGAIN) {
+        /* Do nothing */
+    }
+    if (res != DOCA_SUCCESS)
+        DOCA_LOG_ERR("Failed to submit DMA job: %s", doca_get_error_string(res));
+
+    /* On DOCA_SUCCESS, Verify DMA job result */
+    if (event.result.u64 == DOCA_SUCCESS) {
+        //DOCA_LOG_INFO("Remote DMA copy was done Successfully");
+        //DOCA_LOG_INFO("Memory content: %s", dst_buffer);
+    } else {
+        DOCA_LOG_ERR("DMA job returned unsuccessfully");
+        res = DOCA_ERROR_UNKNOWN;
+    }
+    doca_buf_refcount_rm(src_doca_buf, NULL);
+    return true;
+}
+
+bool Receiver::ExecuteDMAJobsRead(int blk_num, bool random) {
+    doca_error_t res;
+    struct doca_buf *src_doca_buf;
+    /* Construct DOCA buffer for each address range */
+    char* target_remote_buffer = get_remote_block(blk_num, random);
     res = doca_buf_inventory_buf_by_addr(state.buf_inv,
                                          remote_mmap,
                                          target_remote_buffer,
@@ -255,6 +329,65 @@ bool Receiver::ExecuteDMAJobsWrite() {
     struct doca_buf *src_doca_buf;
     /* Construct DOCA buffer for each address range */
     char* target_remote_buffer = get_random_remote_block();
+    res = doca_buf_inventory_buf_by_addr(state.buf_inv, remote_mmap, target_remote_buffer, block_size, &src_doca_buf);
+    if (res != DOCA_SUCCESS) {
+        DOCA_LOG_ERR("Unable to acquire DOCA buffer representing remote buffer: %s", doca_get_error_string(res));
+        doca_mmap_destroy(remote_mmap);
+        cleanup_core_objects(&state);
+        destroy_core_objects(&state);
+        return res;
+    }
+
+    //clear local buffer
+    memset(dst_buffer, '0', dst_buffer_len);
+
+    struct doca_job doca_job = {0};
+    /* Construct DMA job */
+    doca_job.type = DOCA_DMA_JOB_MEMCPY;
+    doca_job.flags = DOCA_JOB_FLAGS_NONE;
+    doca_job.ctx = state.ctx;
+
+    dma_job.base = doca_job;
+    dma_job.dst_buff = src_doca_buf;
+    dma_job.src_buff = dst_doca_buf;
+    dma_job.num_bytes_to_copy = dst_buffer_len;
+    /* Enqueue DMA job */
+    res = doca_workq_submit(state.workq, &dma_job.base);
+    if (res != DOCA_SUCCESS) {
+        DOCA_LOG_ERR("Failed to submit DMA job: %s", doca_get_error_string(res));
+        doca_buf_refcount_rm(dst_doca_buf, NULL);
+        doca_buf_refcount_rm(src_doca_buf, NULL);
+        doca_mmap_destroy(remote_mmap);
+        cleanup_core_objects(&state);
+        destroy_core_objects(&state);
+        return false;
+    }
+    /* Wait for job completion */
+    while ((res = doca_workq_progress_retrieve(state.workq, &event, DOCA_WORKQ_RETRIEVE_FLAGS_NONE)) ==
+           DOCA_ERROR_AGAIN) {
+        /* Do nothing */
+    }
+    if (res != DOCA_SUCCESS)
+        DOCA_LOG_ERR("Failed to submit DMA job: %s", doca_get_error_string(res));
+
+    /* On DOCA_SUCCESS, Verify DMA job result */
+    if (event.result.u64 == DOCA_SUCCESS) {
+        //DOCA_LOG_INFO("Remote DMA copy was done Successfully");
+        //DOCA_LOG_INFO("Memory content: %s", dst_buffer);
+    } else {
+        DOCA_LOG_ERR("DMA job returned unsuccessfully");
+        res = DOCA_ERROR_UNKNOWN;
+    }
+    doca_buf_refcount_rm(src_doca_buf, NULL);
+    return true;
+}
+
+bool Receiver::ExecuteDMAJobsWrite(int blk_num, bool random) {
+    doca_error_t res;
+
+    struct doca_buf *src_doca_buf;
+    /* Construct DOCA buffer for each address range */
+    char* target_remote_buffer = get_remote_block(blk_num, random);
     res = doca_buf_inventory_buf_by_addr(state.buf_inv, remote_mmap, target_remote_buffer, block_size, &src_doca_buf);
     if (res != DOCA_SUCCESS) {
         DOCA_LOG_ERR("Unable to acquire DOCA buffer representing remote buffer: %s", doca_get_error_string(res));

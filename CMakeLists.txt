@@ -21,7 +21,15 @@ pkg_check_modules(DOCA_DMA REQUIRED doca-dma)
 pkg_check_modules(DOCA_COMMON REQUIRED doca-common)
 pkg_check_modules(JSON-C REQUIRED json-c)
 
-add_executable(dma_test main.cpp dma_common.cc sender.cc receiver.cc)
+add_executable(dma_test "")
+target_sources(dma_test PUBLIC
+        "main.cpp"
+        "dma_common.cc"
+        "sender.cc"
+        "receiver.cc"
+        "histogram.cc"
+        )
+
 target_include_directories(dma_test PUBLIC
         /opt/mellanox/doca/include
         ${GFLAGS_INCLUDE_DIRS}

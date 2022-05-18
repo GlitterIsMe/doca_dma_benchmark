@@ -124,7 +124,7 @@ doca_error_t Sender::init_sender (struct doca_pci_bdf *pcie_addr, char *src_buff
         return res;
     }
 
-    DOCA_LOG_INFO("Exported memory buffer content: %s", src_buffer);
+    //DOCA_LOG_INFO("Exported memory buffer content: %s", src_buffer);
 
     /* Send exported string and wait for ack that DMA was done on receiver node */
     if (!send_json_to_receiver(receiver_ip, receiver_port, export_str, export_str_len)) {

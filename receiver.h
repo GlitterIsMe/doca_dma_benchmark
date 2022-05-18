@@ -14,18 +14,22 @@
 
 class Receiver {
 public:
-    explicit Receiver (struct doca_pci_bdf *pcie_addr, const char *port) {
-        dst_buffer = new char[64];
-        dst_buffer_len = 64;
+    explicit Receiver (struct doca_pci_bdf *pcie_addr, const char *port, size_t blk_size) : block_size(blk_size) {
+        dst_buffer = new char[block_size];
+        dst_buffer_len = block_size;
         init_receiver(pcie_addr, port);
-        total_blocks = remote_addr_len / 64;
+        total_blocks = remote_addr_len / block_size;
     }
 
     ~Receiver();
 
     bool ExecuteDMAJobsRead();
 
+    bool ExecuteDMAJobsRead(int blk_num, bool random);
+
     bool ExecuteDMAJobsWrite();
+
+    bool ExecuteDMAJobsWrite(int blk_num, bool random);
 
 private:
     doca_error_t init_receiver(struct doca_pci_bdf *pcie_addr, const char *port);
@@ -33,6 +37,7 @@ private:
     void send_ack_to_sender() const;
 
     char* get_random_remote_block();
+    char* get_remote_block(int blk_num, bool random);
 
     app_state state;
     int receiver_fd;
