@@ -126,7 +126,6 @@ void Receiver::send_ack_to_sender() const {
         char ack_buffer[] = "DMA operation on receiver node was completed";
         int length = strlen(ack_buffer) + 1;
 
-        printf("[%d]: send_ack_to_sender\n", core_id);
         ret = write(sender_fd, ack_buffer, length);
         if (ret != length)
             DOCA_LOG_ERR("Failed to send ack message to sender node");
@@ -135,7 +134,7 @@ void Receiver::send_ack_to_sender() const {
     }
 }
 
-doca_error_t Receiver::init_receiver(struct doca_pci_bdf *pcie_addr, const char *port) {
+doca_error_t Receiver::init_receiver(struct doca_pci_bdf *pcie_addr, const char *port, int buf_nums) {
     doca_error_t res;
     uint32_t max_chunks = 1;
     uint32_t pg_sz = 1024 * 4;
@@ -145,7 +144,7 @@ doca_error_t Receiver::init_receiver(struct doca_pci_bdf *pcie_addr, const char 
     if (res != DOCA_SUCCESS)
         return res;
 
-    res = create_core_objects(&state);
+    res = create_core_objects(&state, buf_nums);
     if (res != DOCA_SUCCESS) {
         destroy_core_objects(&state);
         return res;

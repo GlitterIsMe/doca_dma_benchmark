@@ -20,7 +20,7 @@ struct app_state {
 
 doca_error_t open_local_device(struct doca_pci_bdf *pcie_addr, struct app_state *state);
 
-doca_error_t create_core_objects(struct app_state *state);
+doca_error_t create_core_objects(struct app_state *state, int buf_inv_num_elems);
 
 doca_error_t init_core_objects(struct app_state *state, uint32_t max_chunks);
 

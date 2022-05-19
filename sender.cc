@@ -92,8 +92,8 @@ bool Sender::send_json_to_receiver(char *ip, uint16_t port, char *export_str, si
     return true;
 }
 
-doca_error_t Sender::init_sender(struct doca_pci_bdf *pcie_addr, char *src_buffer, size_t length, char *receiver_ip,
-                                 uint16_t receiver_port) {
+doca_error_t Sender::init_sender(struct doca_pci_bdf *pcie_addr, char *src_buffer, size_t length,
+        char *receiver_ip, uint16_t receiver_port) {
     //struct app_state state = {0};
     doca_error_t res;
     //char *export_str;

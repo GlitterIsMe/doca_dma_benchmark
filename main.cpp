@@ -88,7 +88,9 @@ int main(int argc, char** argv) {
         pci_bdf.function = 0x0;
         std::vector<Receiver*> receivers;
         for (int i = 0; i < FLAGS_threads; ++i) {
-            receivers.push_back(new Receiver(&pci_bdf, "45678", FLAGS_block_size, FLAGS_depth, FLAGS_threads, i));
+            receivers.push_back(new Receiver(&pci_bdf, "45678",
+                                             FLAGS_block_size, FLAGS_depth,
+                                             FLAGS_threads, i));
         }
         std::vector<std::thread> threads;
         if (FLAGS_benchmarks == "read") {

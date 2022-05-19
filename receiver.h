@@ -22,7 +22,7 @@ public:
         total_core_num = core_num;
         core_id = id;
         dma_jobs = new struct doca_dma_job_memcpy[depth];
-        init_receiver(pcie_addr, port);
+        init_receiver(pcie_addr, port, depth + 1);
         total_blocks = remote_addr_len / total_core_num / block_size;
         local_remote_addr = remote_addr + (remote_addr_len / total_core_num * core_id);
     }
@@ -42,7 +42,7 @@ public:
     bool ExecuteDMAJobsWriteMulti(int blk_num, bool random, int nums);
 
 private:
-    doca_error_t init_receiver(struct doca_pci_bdf *pcie_addr, const char *port);
+    doca_error_t init_receiver(struct doca_pci_bdf *pcie_addr, const char *port, int buf_nums);
     bool receive_json_from_sender (const char *port, char *export_buffer, size_t export_buffer_len);
     void send_ack_to_sender() const;
 
