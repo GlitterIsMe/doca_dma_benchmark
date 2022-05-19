@@ -38,6 +38,12 @@ static void RunDMAReadThroughput(Receiver* ep, uint32_t ops, uint32_t depth, boo
     }
 }
 
+static void RunDMAWriteThroughput(Receiver* ep, uint32_t ops, uint32_t depth, bool random) {
+    for (int i = 0; i < ops; i = i + depth) {
+        ep->ExecuteDMAJobsWriteMulti(i, random, depth);
+    }
+}
+
 int main(int argc, char** argv) {
     google::ParseCommandLineFlags(&argc, &argv, false);
     if (FLAGS_is_server) {
@@ -99,14 +105,18 @@ int main(int argc, char** argv) {
             printf("DMA %s read throughput: %lf KOPS\n", FLAGS_random ? "random" : "sequential", FLAGS_ops / dma_read_lat.count() * 1000000 / 1000);
             printf("DMA %s read bandwidth: %lf MB/s\n", FLAGS_random ? "random" : "sequential", FLAGS_ops * FLAGS_block_size / 1024.0 / 1024.0 / dma_read_lat.count() * 1000000 / 1000);
         } else if (FLAGS_benchmarks == "write") {
-            /*for (int i = 0; i < FLAGS_ops; ++i) {
-                auto end1 = std::chrono::high_resolution_clock::now();
-                receiver->ExecuteDMAJobsWrite(i, FLAGS_random);
-                auto end2 = std::chrono::high_resolution_clock::now();
-                std::chrono::duration<double, std::micro> dma_write_lat = end2 - end1;
-                hist.Add(dma_write_lat.count());
+            auto start = std::chrono::high_resolution_clock::now();
+            for (int i = 0; i < FLAGS_threads; ++i) {
+                threads.emplace_back(RunDMAWriteThroughput, receivers[i], FLAGS_ops / FLAGS_threads, FLAGS_depth, FLAGS_random);
             }
-            printf("DMA random write lat: %s\n", hist.ToString().c_str());*/
+            for (int i = 0; i < FLAGS_threads; ++i) {
+                threads[i].join();
+            }
+            auto end1 = std::chrono::high_resolution_clock::now();
+            std::chrono::duration<double, std::micro> dma_write_lat = end1 - start;
+            printf("Finish %d ops with %d B blocks in %lf s\n", FLAGS_ops, FLAGS_block_size, dma_write_lat.count() / 1000000);
+            printf("DMA %s write throughput: %lf KOPS\n", FLAGS_random ? "random" : "sequential", FLAGS_ops / dma_write_lat.count() * 1000000 / 1000);
+            printf("DMA %s write bandwidth: %lf MB/s\n", FLAGS_random ? "random" : "sequential", FLAGS_ops * FLAGS_block_size / 1024.0 / 1024.0 / dma_write_lat.count() * 1000000 / 1000);
         }
         for (int i = 0; i < FLAGS_threads; ++i) {
             delete receivers[i];

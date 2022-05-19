@@ -39,6 +39,8 @@ public:
 
     bool ExecuteDMAJobsWrite(int blk_num, bool random);
 
+    bool ExecuteDMAJobsWriteMulti(int blk_num, bool random, int nums);
+
 private:
     doca_error_t init_receiver(struct doca_pci_bdf *pcie_addr, const char *port);
     bool receive_json_from_sender (const char *port, char *export_buffer, size_t export_buffer_len);

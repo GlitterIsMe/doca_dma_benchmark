@@ -526,3 +526,74 @@ bool Receiver::ExecuteDMAJobsWrite(int blk_num, bool random) {
     doca_buf_refcount_rm(src_doca_buf, NULL);
     return true;
 }
+
+bool Receiver::ExecuteDMAJobsWriteMulti(int blk_num, bool random, int nums) {
+    doca_error_t res;
+    struct doca_buf **src_doca_bufs = new struct doca_buf*[nums];
+    struct doca_job* doca_job = new struct doca_job[nums];
+    for (int i = 0; i < nums; ++i) {
+        /* Construct DOCA buffer for each address range */
+        char* target_remote_buffer = get_remote_block(blk_num + i, random);
+        res = doca_buf_inventory_buf_by_addr(state.buf_inv,
+                                             remote_mmap,
+                                             target_remote_buffer,
+                                             block_size,
+                                             &src_doca_bufs[i]);
+        if (res != DOCA_SUCCESS) {
+            DOCA_LOG_ERR("Unable to acquire DOCA buffer representing remote buffer: %s", doca_get_error_string(res));
+            doca_mmap_destroy(remote_mmap);
+            cleanup_core_objects(&state);
+            destroy_core_objects(&state);
+            return res;
+        }
+
+        /* Construct DMA job */
+        doca_job[i].type = DOCA_DMA_JOB_MEMCPY;
+        doca_job[i].flags = DOCA_JOB_FLAGS_NONE;
+        doca_job[i].ctx = state.ctx;
+
+        dma_jobs[i].base = doca_job[i];
+        dma_jobs[i].dst_buff = src_doca_bufs[i];
+        dma_jobs[i].src_buff = dst_doca_buf;
+        dma_jobs[i].num_bytes_to_copy = dst_buffer_len;
+    }
+
+    /* Enqueue DMA job */
+    for (int i = 0; i < nums; ++i) {
+        res = doca_workq_submit(state.workq, &dma_jobs[i].base);
+        if (res != DOCA_SUCCESS) {
+            DOCA_LOG_ERR("Failed to submit DMA job: %s", doca_get_error_string(res));
+            doca_buf_refcount_rm(dst_doca_buf, NULL);
+            doca_buf_refcount_rm(src_doca_bufs[i], NULL);
+            doca_mmap_destroy(remote_mmap);
+            cleanup_core_objects(&state);
+            destroy_core_objects(&state);
+            return false;
+        }
+    }
+
+    /* Wait for job completion */
+    int total_completed = 0;
+    for (int i = 0; total_completed < nums; ++i) {
+        while ((res = doca_workq_progress_retrieve(state.workq, &event, DOCA_WORKQ_RETRIEVE_FLAGS_NONE)) ==
+               DOCA_ERROR_AGAIN) {
+            /* Do nothing */
+        }
+        if (res != DOCA_SUCCESS)
+            DOCA_LOG_ERR("Failed to submit DMA job: %s", doca_get_error_string(res));
+
+        /* On DOCA_SUCCESS, Verify DMA job result */
+        if (event.result.u64 == DOCA_SUCCESS) {
+            //DOCA_LOG_INFO("Remote DMA copy was done Successfully");
+            //DOCA_LOG_INFO("Memory content: %s", dst_buffer);
+        } else {
+            DOCA_LOG_ERR("DMA job returned unsuccessfully");
+            res = DOCA_ERROR_UNKNOWN;
+        }
+        doca_buf_refcount_rm(src_doca_bufs[i], NULL);
+        total_completed++;
+    }
+    delete[] src_doca_bufs;
+    delete[] doca_job;
+    return true;
+}
