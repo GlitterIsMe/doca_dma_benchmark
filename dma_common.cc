@@ -1,97 +1,230 @@
-//
-// Created by YiwenZhang on 2022/5/17.
-//
+/*
+ * Copyright (c) 2022 NVIDIA CORPORATION & AFFILIATES, ALL RIGHTS RESERVED.
+ *
+ * This software product is a proprietary product of NVIDIA CORPORATION &
+ * AFFILIATES (the "Company") and all right, title, and interest in and to the
+ * software product, including all associated intellectual property rights, are
+ * and shall remain exclusively with the Company.
+ *
+ * This software product is governed by the End User License Agreement
+ * provided with the software product.
+ *
+ */
 
-#include "dma_common.h"
-#include <stdint.h>
 #include <string.h>
+#include <bsd/string.h>
+#include <unistd.h>
 
-#include <doca_buf.h>
 #include <doca_buf_inventory.h>
-#include <doca_ctx.h>
 #include <doca_dev.h>
 #include <doca_dma.h>
 #include <doca_error.h>
 #include <doca_log.h>
 #include <doca_mmap.h>
+#include <doca_argp.h>
 
 #include "dma_common.h"
 
 DOCA_LOG_REGISTER(DMA_COMMON);
 
-doca_error_t
-open_local_device(struct doca_pci_bdf *desired_addr, struct app_state *state) {
-    struct doca_devinfo *queried_device = NULL;
-    struct doca_devinfo **devlist;
-    struct doca_pci_bdf dev_addr;
-    doca_error_t res;
-    uint32_t dev_count = 0;
-    uint32_t it;
+/*
+ * ARGP Callback - Handle PCI device address parameter
+ *
+ * @param [in]: Input parameter
+ * @config [in/out]: Program configuration context
+ * @return: DOCA_SUCCESS on success and DOCA_ERROR otherwise
+ */
+static doca_error_t
+pci_callback(void *param, void *config)
+{
+    struct dma_config *conf = (struct dma_config *)config;
+    const char *addr = (char *)param;
+    int addr_len = strnlen(addr, MAX_ARG_SIZE);
 
-    res = doca_devinfo_list_create(&devlist, &dev_count);
-    if (res != DOCA_SUCCESS) {
-        DOCA_LOG_ERR("No suitable DOCA device found: %s", doca_get_error_string(res));
-        return res;
+    if (addr_len == MAX_ARG_SIZE) {
+        DOCA_LOG_ERR("Entered pci address exceeded buffer size of: %d", MAX_ARG_SIZE - 1);
+        return DOCA_ERROR_INVALID_VALUE;
     }
 
-    for (it = 0; it < dev_count; ++it) {
-        if (doca_devinfo_property_get(devlist[it], DOCA_DEVINFO_PROPERTY_PCI_ADDR, (uint8_t *) &dev_addr,
-                                      sizeof(struct doca_pci_bdf)) == DOCA_SUCCESS &&
-            desired_addr->raw == dev_addr.raw) {
-            queried_device = devlist[it];
-            break;
-        }
+    strlcpy(conf->pci_address, addr, MAX_ARG_SIZE);
+
+    return DOCA_SUCCESS;
+}
+
+/*
+ * ARGP Callback - Handle text to copy parameter
+ *
+ * @param [in]: Input parameter
+ * @config [in/out]: Program configuration context
+ * @return: DOCA_SUCCESS on success and DOCA_ERROR otherwise
+ */
+static doca_error_t
+text_callback(void *param, void *config)
+{
+    struct dma_config *conf = (struct dma_config *)config;
+    const char *txt = (char *)param;
+    int txt_len = strnlen(txt, MAX_TXT_SIZE);
+
+    if (txt_len == MAX_TXT_SIZE) {
+        DOCA_LOG_ERR("Entered text exceeded buffer size of: %d", MAX_TXT_SIZE - 1);
+        return DOCA_ERROR_INVALID_VALUE;
     }
 
-    res = doca_dev_open(queried_device, &state->dev);
-    if (res != DOCA_SUCCESS)
-        DOCA_LOG_ERR("No suitable DOCA device found: %s", doca_get_error_string(res));
+    strlcpy(conf->cpy_txt, txt, MAX_TXT_SIZE);
 
-    if (doca_devinfo_list_destroy(devlist) != DOCA_SUCCESS)
-        DOCA_LOG_ERR("Failed to destroy list of DOCA devices: %s", doca_get_error_string(res));
+    return DOCA_SUCCESS;
+}
 
-    return res;
+/*
+ * ARGP Callback - Handle exported descriptor file path parameter
+ *
+ * @param [in]: Input parameter
+ * @config [in/out]: Program configuration context
+ * @return: DOCA_SUCCESS on success and DOCA_ERROR otherwise
+ */
+static doca_error_t
+descriptor_path_callback(void *param, void *config)
+{
+    struct dma_config *conf = (struct dma_config *)config;
+    const char *path = (char *)param;
+    int path_len = strnlen(path, MAX_ARG_SIZE);
+
+    if (path_len == MAX_ARG_SIZE) {
+        DOCA_LOG_ERR("Entered path exceeded buffer size: %d", MAX_ARG_SIZE - 1);
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+#ifdef DOCA_ARCH_DPU
+    if (access(path, F_OK | R_OK) != 0) {
+		DOCA_LOG_ERR("Failed to find file path pointed by export descriptor: %s", path);
+		return DOCA_ERROR_INVALID_VALUE;
+	}
+#endif
+
+    strlcpy(conf->export_desc_path, path, MAX_ARG_SIZE);
+
+    return DOCA_SUCCESS;
+}
+
+/*
+ * ARGP Callback - Handle buffer information file path parameter
+ *
+ * @param [in]: Input parameter
+ * @config [in/out]: Program configuration context
+ * @return: DOCA_SUCCESS on success and DOCA_ERROR otherwise
+ */
+static doca_error_t
+buf_info_path_callback(void *param, void *config)
+{
+    struct dma_config *conf = (struct dma_config *)config;
+    const char *path = (char *)param;
+    int path_len = strnlen(path, MAX_ARG_SIZE);
+
+    if (path_len == MAX_ARG_SIZE) {
+        DOCA_LOG_ERR("Entered path exceeded buffer size: %d", MAX_ARG_SIZE - 1);
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+#ifdef DOCA_ARCH_DPU
+    if (access(path, F_OK | R_OK) != 0) {
+		DOCA_LOG_ERR("Failed to find file path pointed by buffer information: %s", path);
+		return DOCA_ERROR_INVALID_VALUE;
+	}
+#endif
+
+    strlcpy(conf->buf_info_path, path, MAX_ARG_SIZE);
+
+    return DOCA_SUCCESS;
 }
 
 doca_error_t
-create_core_objects(struct app_state *state, int buf_inv_num_elems) {
+register_dma_params()
+{
+    doca_error_t result;
+    struct doca_argp_param *pci_address_param, *cpy_txt_param, *export_desc_path_param, *buf_info_path_param;
+
+    /* Create and register PCI address param */
+    result = doca_argp_param_create(&pci_address_param);
+    if (result != DOCA_SUCCESS) {
+        DOCA_LOG_ERR("Failed to create ARGP param: %s", doca_get_error_string(result));
+        return result;
+    }
+    doca_argp_param_set_short_name(pci_address_param, "p");
+    doca_argp_param_set_long_name(pci_address_param, "pci");
+    doca_argp_param_set_description(pci_address_param, "DOCA DMA device PCI address");
+    doca_argp_param_set_callback(pci_address_param, pci_callback);
+    doca_argp_param_set_type(pci_address_param, DOCA_ARGP_TYPE_STRING);
+    result = doca_argp_register_param(pci_address_param);
+    if (result != DOCA_SUCCESS) {
+        DOCA_LOG_ERR("Failed to register program param: %s", doca_get_error_string(result));
+        return result;
+    }
+
+    /* Create and register text to copy param */
+    result = doca_argp_param_create(&cpy_txt_param);
+    if (result != DOCA_SUCCESS) {
+        DOCA_LOG_ERR("Failed to create ARGP param: %s", doca_get_error_string(result));
+        return result;
+    }
+    doca_argp_param_set_short_name(cpy_txt_param, "t");
+    doca_argp_param_set_long_name(cpy_txt_param, "text");
+    doca_argp_param_set_description(cpy_txt_param,
+                                    "Text to DMA copy from the Host to the DPU (relevant only on the Host side)");
+    doca_argp_param_set_callback(cpy_txt_param, text_callback);
+    doca_argp_param_set_type(cpy_txt_param, DOCA_ARGP_TYPE_STRING);
+    result = doca_argp_register_param(cpy_txt_param);
+    if (result != DOCA_SUCCESS) {
+        DOCA_LOG_ERR("Failed to register program param: %s", doca_get_error_string(result));
+        return result;
+    }
+
+    /* Create and register exported descriptor file path param */
+    result = doca_argp_param_create(&export_desc_path_param);
+    if (result != DOCA_SUCCESS) {
+        DOCA_LOG_ERR("Failed to create ARGP param: %s", doca_get_error_string(result));
+        return result;
+    }
+    doca_argp_param_set_short_name(export_desc_path_param, "d");
+    doca_argp_param_set_long_name(export_desc_path_param, "descriptor-path");
+    doca_argp_param_set_description(export_desc_path_param,
+                                    "Exported descriptor file path to save (Host) or to read from (DPU)");
+    doca_argp_param_set_callback(export_desc_path_param, descriptor_path_callback);
+    doca_argp_param_set_type(export_desc_path_param, DOCA_ARGP_TYPE_STRING);
+    result = doca_argp_register_param(export_desc_path_param);
+    if (result != DOCA_SUCCESS) {
+        DOCA_LOG_ERR("Failed to register program param: %s", doca_get_error_string(result));
+        return result;
+    }
+
+    /* Create and register buffer information file param */
+    result = doca_argp_param_create(&buf_info_path_param);
+    if (result != DOCA_SUCCESS) {
+        DOCA_LOG_ERR("Failed to create ARGP param: %s", doca_get_error_string(result));
+        return result;
+    }
+    doca_argp_param_set_short_name(buf_info_path_param, "b");
+    doca_argp_param_set_long_name(buf_info_path_param, "buffer-path");
+    doca_argp_param_set_description(buf_info_path_param,
+                                    "Buffer information file path to save (Host) or to read from (DPU)");
+    doca_argp_param_set_callback(buf_info_path_param, buf_info_path_callback);
+    doca_argp_param_set_type(buf_info_path_param, DOCA_ARGP_TYPE_STRING);
+    result = doca_argp_register_param(buf_info_path_param);
+    if (result != DOCA_SUCCESS) {
+        DOCA_LOG_ERR("Failed to register program param: %s", doca_get_error_string(result));
+        return result;
+    }
+
+    return DOCA_SUCCESS;
+}
+
+doca_error_t
+host_init_core_objects(struct program_core_objects *state)
+{
     doca_error_t res;
 
-    res = doca_mmap_create("my_mmap", &state->mmap);
+    res = doca_mmap_create(NULL, &state->mmap);
     if (res != DOCA_SUCCESS) {
         DOCA_LOG_ERR("Unable to create mmap: %s", doca_get_error_string(res));
-        return res;
-    }
-
-    res = doca_buf_inventory_create("my_inventory", buf_inv_num_elems, DOCA_BUF_EXTENSION_NONE, &state->buf_inv);
-    if (res != DOCA_SUCCESS) {
-        DOCA_LOG_ERR("Unable to create buffer inventory: %s", doca_get_error_string(res));
-        return res;
-    }
-
-    res = doca_dma_create(&(state->dma_ctx));
-    if (res != DOCA_SUCCESS) {
-        DOCA_LOG_ERR("Unable to create DMA engine: %s", doca_get_error_string(res));
-        return res;
-    }
-
-    state->ctx = doca_dma_as_ctx(state->dma_ctx);
-
-    res = doca_workq_create(32, &(state->workq));
-    if (res != DOCA_SUCCESS)
-        DOCA_LOG_ERR("Unable to create work queue: %s", doca_get_error_string(res));
-
-    return res;
-}
-
-doca_error_t
-init_core_objects(struct app_state *state, const uint32_t max_chunks) {
-    doca_error_t res;
-
-    res = doca_mmap_property_set(state->mmap, DOCA_MMAP_MAX_NUM_CHUNKS, (uint8_t *const) (&max_chunks),
-                                 sizeof(max_chunks));
-    if (res != DOCA_SUCCESS) {
-        DOCA_LOG_ERR("Unable to set memory map nb chunks: %s", doca_get_error_string(res));
         return res;
     }
 
@@ -102,111 +235,30 @@ init_core_objects(struct app_state *state, const uint32_t max_chunks) {
     }
 
     res = doca_mmap_dev_add(state->mmap, state->dev);
-    if (res != DOCA_SUCCESS) {
-        DOCA_LOG_ERR("Unable to add device to mmap: %s", doca_get_error_string(res));
-        return res;
-    }
-
-    res = doca_buf_inventory_start(state->buf_inv);
-    if (res != DOCA_SUCCESS) {
-        DOCA_LOG_ERR("Unable to start buffer inventory: %s", doca_get_error_string(res));
-        return res;
-    }
-
-    res = doca_ctx_dev_add(state->ctx, state->dev);
-    if (res != DOCA_SUCCESS) {
-        DOCA_LOG_ERR("Unable to register device with DMA context: %s", doca_get_error_string(res));
-        return res;
-    }
-
-    res = doca_ctx_start(state->ctx);
-    if (res != DOCA_SUCCESS) {
-        DOCA_LOG_ERR("Unable to start DMA context: %s", doca_get_error_string(res));
-        return res;
-    }
-
-    res = doca_ctx_workq_add(state->ctx, state->workq);
-    if (res != DOCA_SUCCESS)
-        DOCA_LOG_ERR("Unable to register work queue with context: %s", doca_get_error_string(res));
-
-    return res;
-}
-
-doca_error_t
-init_core_objects_sender(struct app_state *state) {
-    doca_error_t res;
-
-    res = doca_mmap_create("my_mmap", &state->mmap);
-    if (res != DOCA_SUCCESS) {
-        DOCA_LOG_ERR("Unable to create mmap: %s", doca_get_error_string(res));
-        return res;
-    }
-
-    res = doca_mmap_start(state->mmap);
-    if (res != DOCA_SUCCESS) {
-        DOCA_LOG_ERR("Unable to start memory map: %s", doca_get_error_string(res));
-        return res;
-    }
-
-    res = doca_mmap_dev_add(state->mmap, state->dev);
     if (res != DOCA_SUCCESS)
         DOCA_LOG_ERR("Unable to add device to mmap: %s", doca_get_error_string(res));
 
     return res;
 }
 
-doca_error_t
-populate_mmap(struct doca_mmap *mmap, char *buffer, size_t length, size_t pg_sz) {
-    doca_error_t res;
-
-    res = doca_mmap_populate(mmap, buffer, length, pg_sz, NULL, NULL);
-    if (res != DOCA_SUCCESS)
-        DOCA_LOG_ERR("Unable to populate memory map: %s", doca_get_error_string(res));
-
-    return res;
-}
-
 void
-cleanup_core_objects(struct app_state *state) {
+dma_cleanup(struct program_core_objects *state, struct doca_dma *dma_ctx)
+{
     doca_error_t res;
 
-    res = doca_ctx_workq_rm(state->ctx, state->workq);
-    if (res != DOCA_SUCCESS)
-        DOCA_LOG_ERR("Failed to remove work queue from ctx: %s", doca_get_error_string(res));
+    destroy_core_objects(state);
 
-
-    res = doca_ctx_stop(state->ctx);
-    if (res != DOCA_SUCCESS)
-        DOCA_LOG_ERR("Unable to stop DMA context: %s", doca_get_error_string(res));
-
-    res = doca_ctx_dev_rm(state->ctx, state->dev);
-    if (res != DOCA_SUCCESS)
-        DOCA_LOG_ERR("Failed to remove device from DMA ctx: %s", doca_get_error_string(res));
-
-    res = doca_mmap_dev_rm(state->mmap, state->dev);
-    if (res != DOCA_SUCCESS)
-        DOCA_LOG_ERR("Failed to remove device from mmap: %s", doca_get_error_string(res));
-}
-
-void
-destroy_core_objects(struct app_state *state) {
-    doca_error_t res;
-
-    res = doca_workq_destroy(state->workq);
-    if (res != DOCA_SUCCESS)
-        DOCA_LOG_ERR("Failed to destroy work queue: %s", doca_get_error_string(res));
-    state->workq = NULL;
-
-    res = doca_dma_destroy(state->dma_ctx);
+    res = doca_dma_destroy(dma_ctx);
     if (res != DOCA_SUCCESS)
         DOCA_LOG_ERR("Failed to destroy dma: %s", doca_get_error_string(res));
-    state->dma_ctx = NULL;
-    state->ctx = NULL;
 
-    res = doca_buf_inventory_destroy(state->buf_inv);
-    if (res != DOCA_SUCCESS)
-        DOCA_LOG_ERR("Failed to destroy buf inventory: %s", doca_get_error_string(res));
-    state->buf_inv = NULL;
+    state->ctx = NULL;
+}
+
+void
+host_destroy_core_objects(struct program_core_objects *state)
+{
+    doca_error_t res;
 
     res = doca_mmap_destroy(state->mmap);
     if (res != DOCA_SUCCESS)
@@ -219,17 +271,8 @@ destroy_core_objects(struct app_state *state) {
     state->dev = NULL;
 }
 
-void
-destroy_core_objects_sender(struct app_state *state) {
-    doca_error_t res;
-
-    res = doca_mmap_destroy(state->mmap);
-    if (res != DOCA_SUCCESS)
-        DOCA_LOG_ERR("Failed to destroy mmap: %s", doca_get_error_string(res));
-    state->mmap = NULL;
-
-    res = doca_dev_close(state->dev);
-    if (res != DOCA_SUCCESS)
-        DOCA_LOG_ERR("Failed to close device: %s", doca_get_error_string(res));
-    state->dev = NULL;
+doca_error_t
+dma_jobs_is_supported(struct doca_devinfo *devinfo)
+{
+    return doca_dma_job_get_supported(devinfo, DOCA_DMA_JOB_MEMCPY);
 }
