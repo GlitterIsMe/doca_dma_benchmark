@@ -117,7 +117,7 @@ doca_error_t Sender::init_sender(struct doca_pci_bdf *pcie_addr, char *src_buffe
     }
 
     /* Export DOCA mmap to enable DMA */
-    res = doca_mmap_export(state.mmap, state.dev, (uint8_t **) &export_str, &export_str_len);
+    res = doca_mmap_export(state.mmap, state.dev, (void**)&export_str, &export_str_len);
     if (res != DOCA_SUCCESS) {
         destroy_core_objects_sender(&state);
         return res;

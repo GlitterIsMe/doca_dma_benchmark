@@ -18,7 +18,7 @@ DEFINE_bool(is_server, true, "True means Sender (Host), False means Receiver (DP
 
 // Server / Host
 DEFINE_bool(use_pmem, true, "Use PMEM or DRAM");
-DEFINE_string(pmem_path, "/dev/dax0.3", "The path of the pmem device");
+DEFINE_string(pmem_path, "/dev/dax0.1", "The path of the pmem device");
 DEFINE_uint64(buf_size, 32UL * 1024 * 1024 * 1024, "The size of pmem device");
 DEFINE_string(receiver_ip, "192.168.100.2", "The ip of the receiver");
 DEFINE_int32(receiver_port, 45678, "The port of the receiver");
@@ -62,7 +62,7 @@ int main(int argc, char** argv) {
         }
 
         struct doca_pci_bdf pci_bdf;
-        pci_bdf.bus = 0xaf;
+        pci_bdf.bus = 0x86;
         pci_bdf.device = 0x00;
         pci_bdf.function = 0x0;
 
