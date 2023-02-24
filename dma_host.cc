@@ -32,7 +32,7 @@
 
 #define _GB 1024*1024*1024UL
 
-//#define USE_PMEM
+#define USE_PMEM
 
 DOCA_LOG_REGISTER(DMA_COPY_HOST::MAIN);
 //DOCA_LOG_REGISTER(DMA_COPY_HOST);
@@ -222,18 +222,17 @@ main(int argc, char **argv)
 #endif
 
 #ifdef USE_PMEM
-    printf("Mapping PM device %s size %lu\n", dma_conf.pm_addr, dma_conf.pm_size);
-    size_t mapped_len = 0;
+    DOCA_LOG_ERR("Mapping PM device %s size %lu\n", dma_conf.pm_addr, dma_conf.pm_size);
     int is_pmem = 0;
-    void* raw_pm = pmem_map_file(dma_conf.pm_addr, dma_conf.pm_size, PMEM_FILE_CREATE, 0666, &mapped_len, &is_pmem);
-    if (!raw_pm) {
-        fprintf(stderr, "pmem_map_file failed for %s\n", strerror(errno));
+    src_buffer = (char*)pmem_map_file(dma_conf.pm_addr, dma_conf.pm_size, PMEM_FILE_CREATE, 0666, &length, &is_pmem);
+    if (!src_buffer) {
+        DOCA_LOG_ERR("pmem_map_file failed for %s\n", strerror(errno));
         DOCA_LOG_ERR("Map PM file failed");
         doca_argp_destroy();
         return EXIT_FAILURE;
     } else {
-        printf("Mapping PM device success size %lu\n", mapped_len);
-        dma_conf.pm_size = mapped_len;
+        DOCA_LOG_ERR("Mapping PM device success size %lu\n", length);
+        dma_conf.pm_size = length;
     }
 #else
     length = 4096;
@@ -269,8 +268,11 @@ main(int argc, char **argv)
         doca_argp_destroy();
         return EXIT_FAILURE;
     }
-
+#ifdef USE_PMEM
+    pmem_unmap(src_buffer, length);
+#else
     free(src_buffer);
+#endif
     doca_argp_destroy();
 
     return EXIT_SUCCESS;
