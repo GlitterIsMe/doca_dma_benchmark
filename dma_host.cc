@@ -16,6 +16,7 @@
 #include <signal.h>
 #include <stdbool.h>
 #include <unistd.h>
+#include <cerrno>
 
 #include <doca_argp.h>
 #include <doca_dev.h>
@@ -23,8 +24,15 @@
 #include <doca_dma.h>
 #include <doca_error.h>
 #include <doca_mmap.h>
+
+#include <libpmem.h>
+
 #include "utils.h"
 #include "dma_common.h"
+
+#define _GB 1024*1024*1024UL
+
+//#define USE_PMEM
 
 DOCA_LOG_REGISTER(DMA_COPY_HOST::MAIN);
 //DOCA_LOG_REGISTER(DMA_COPY_HOST);
@@ -130,6 +138,7 @@ dma_copy_host(struct doca_pci_bdf *pcie_addr, char *src_buffer, size_t src_buffe
     /* Populate the memory map with the allocated memory */
     result = doca_mmap_populate(state.mmap, src_buffer, src_buffer_size, PAGE_SIZE, NULL, NULL);
     if (result != DOCA_SUCCESS) {
+        DOCA_LOG_ERR("populate failed pgsize %d", PAGE_SIZE);
         host_destroy_core_objects(&state);
         return result;
     }
@@ -184,7 +193,9 @@ main(int argc, char **argv)
 
     /* Set the default configuration values (Example values) */
     strcpy(dma_conf.pci_address, "b1:00.0");
-    strcpy(dma_conf.cpy_txt, "This is a sample piece of text");
+    //strcpy(dma_conf.cpy_txt, "This is a sample piece of text");
+    strcpy(dma_conf.pm_addr, "/dev/dax1.0");
+    dma_conf.pm_size = 0 * _GB;
     strcpy(dma_conf.export_desc_path, "/tmp/export_desc.txt");
     strcpy(dma_conf.buf_info_path, "/tmp/buffer_info.txt");
 
@@ -209,16 +220,39 @@ main(int argc, char **argv)
 	doca_argp_destroy();
 	return EXIT_FAILURE;
 #endif
-    length = strlen(dma_conf.cpy_txt) + 1;
 
+#ifdef USE_PMEM
+    printf("Mapping PM device %s size %lu\n", dma_conf.pm_addr, dma_conf.pm_size);
+    size_t mapped_len = 0;
+    int is_pmem = 0;
+    void* raw_pm = pmem_map_file(dma_conf.pm_addr, dma_conf.pm_size, PMEM_FILE_CREATE, 0666, &mapped_len, &is_pmem);
+    if (!raw_pm) {
+        fprintf(stderr, "pmem_map_file failed for %s\n", strerror(errno));
+        DOCA_LOG_ERR("Map PM file failed");
+        doca_argp_destroy();
+        return EXIT_FAILURE;
+    } else {
+        printf("Mapping PM device success size %lu\n", mapped_len);
+        dma_conf.pm_size = mapped_len;
+    }
+#else
+    length = 4096;
     src_buffer = (char *)malloc(length);
+    DOCA_LOG_ERR("Malloc src_buffer");
     if (src_buffer == NULL) {
         DOCA_LOG_ERR("Source buffer allocation failed");
         doca_argp_destroy();
         return EXIT_FAILURE;
     }
-
-    memcpy(src_buffer, dma_conf.cpy_txt, length);
+    memcpy(src_buffer, "abcdefghijklmn", length);
+    /*void* raw_pm = malloc(1*_GB);
+    if (raw_pm == NULL) {
+        DOCA_LOG_ERR("Source buffer allocation failed");
+        doca_argp_destroy();
+        return EXIT_FAILURE;
+    }
+    size_t mapped_len = 1 * _GB;*/
+#endif
 
     result = parse_pci_addr(dma_conf.pci_address, &pcie_dev);
     if (result != DOCA_SUCCESS) {
@@ -228,7 +262,7 @@ main(int argc, char **argv)
         return EXIT_FAILURE;
     }
 
-    result = dma_copy_host(&pcie_dev, src_buffer, length, dma_conf.export_desc_path, dma_conf.buf_info_path);
+    result = dma_copy_host(&pcie_dev, (char*)src_buffer, length, dma_conf.export_desc_path, dma_conf.buf_info_path);
     if (result != DOCA_SUCCESS) {
         DOCA_LOG_ERR("Sample function has failed: %s", doca_get_error_string(result));
         free(src_buffer);

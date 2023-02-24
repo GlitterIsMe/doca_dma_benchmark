@@ -22,6 +22,7 @@
 #include <doca_log.h>
 #include <doca_mmap.h>
 #include <doca_argp.h>
+#include <string>
 
 #include "dma_common.h"
 
@@ -58,7 +59,7 @@ pci_callback(void *param, void *config)
  * @config [in/out]: Program configuration context
  * @return: DOCA_SUCCESS on success and DOCA_ERROR otherwise
  */
-static doca_error_t
+/*static doca_error_t
 text_callback(void *param, void *config)
 {
     struct dma_config *conf = (struct dma_config *)config;
@@ -72,6 +73,35 @@ text_callback(void *param, void *config)
 
     strlcpy(conf->cpy_txt, txt, MAX_TXT_SIZE);
 
+    return DOCA_SUCCESS;
+}*/
+
+static doca_error_t
+path_callback(void *param, void *config)
+{
+    struct dma_config *conf = (struct dma_config *)config;
+    const char *txt = (char *)param;
+    int txt_len = strnlen(txt, MAX_TXT_SIZE);
+
+    if (txt_len == MAX_TXT_SIZE) {
+        DOCA_LOG_ERR("Entered text exceeded buffer size of: %d", MAX_TXT_SIZE - 1);
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    strlcpy(conf->pm_addr, txt, MAX_TXT_SIZE);
+
+    return DOCA_SUCCESS;
+}
+
+static doca_error_t
+size_callback(void *param, void *config)
+{
+    struct dma_config *conf = (struct dma_config *)config;
+    const char *txt = (char *)param;
+    int txt_len = strnlen(txt, MAX_TXT_SIZE);
+    size_t tmp = std::stoi(std::string(txt, txt_len));
+    DOCA_LOG_ERR("%lu", tmp);
+    conf->pm_size = tmp * 1024 * 1024 * 1024UL;
     return DOCA_SUCCESS;
 }
 
@@ -141,7 +171,8 @@ doca_error_t
 register_dma_params()
 {
     doca_error_t result;
-    struct doca_argp_param *pci_address_param, *cpy_txt_param, *export_desc_path_param, *buf_info_path_param;
+    struct doca_argp_param *pci_address_param, /**cpy_txt_param,*/ *export_desc_path_param, *buf_info_path_param;
+    struct doca_argp_param *pm_addr_param, *pm_size_param;
 
     /* Create and register PCI address param */
     result = doca_argp_param_create(&pci_address_param);
@@ -161,7 +192,7 @@ register_dma_params()
     }
 
     /* Create and register text to copy param */
-    result = doca_argp_param_create(&cpy_txt_param);
+    /*result = doca_argp_param_create(&cpy_txt_param);
     if (result != DOCA_SUCCESS) {
         DOCA_LOG_ERR("Failed to create ARGP param: %s", doca_get_error_string(result));
         return result;
@@ -176,7 +207,41 @@ register_dma_params()
     if (result != DOCA_SUCCESS) {
         DOCA_LOG_ERR("Failed to register program param: %s", doca_get_error_string(result));
         return result;
+    }*/
+    result = doca_argp_param_create(&pm_addr_param);
+    if (result != DOCA_SUCCESS) {
+        DOCA_LOG_ERR("Failed to create ARGP param: %s", doca_get_error_string(result));
+        return result;
     }
+    doca_argp_param_set_short_name(pm_addr_param, "P");
+    doca_argp_param_set_long_name(pm_addr_param, "path");
+    doca_argp_param_set_description(pm_addr_param,
+                                    "Path to the PM device (relevant only on the Host side)");
+    doca_argp_param_set_callback(pm_addr_param, path_callback);
+    doca_argp_param_set_type(pm_addr_param, DOCA_ARGP_TYPE_STRING);
+    result = doca_argp_register_param(pm_addr_param);
+    if (result != DOCA_SUCCESS) {
+        DOCA_LOG_ERR("Failed to register program param: %s", doca_get_error_string(result));
+        return result;
+    }
+
+    result = doca_argp_param_create(&pm_size_param);
+    if (result != DOCA_SUCCESS) {
+        DOCA_LOG_ERR("Failed to create ARGP param: %s", doca_get_error_string(result));
+        return result;
+    }
+    doca_argp_param_set_short_name(pm_size_param, "s");
+    doca_argp_param_set_long_name(pm_size_param, "size");
+    doca_argp_param_set_description(pm_size_param,
+                                    "Size of the PM device (relevant only on the Host side)");
+    doca_argp_param_set_callback(pm_size_param, size_callback);
+    doca_argp_param_set_type(pm_size_param, DOCA_ARGP_TYPE_STRING);
+    result = doca_argp_register_param(pm_size_param);
+    if (result != DOCA_SUCCESS) {
+        DOCA_LOG_ERR("Failed to register program param: %s", doca_get_error_string(result));
+        return result;
+    }
+    
 
     /* Create and register exported descriptor file path param */
     result = doca_argp_param_create(&export_desc_path_param);

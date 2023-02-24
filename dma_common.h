@@ -29,7 +29,9 @@
 /* Configuration struct */
 struct dma_config {
     char pci_address[MAX_ARG_SIZE];	     /* PCI device address */
-    char cpy_txt[MAX_TXT_SIZE];	     /* Text to copy between the two local buffers */
+    //char cpy_txt[MAX_TXT_SIZE];	     /* Text to copy between the two local buffers */
+    char pm_addr[MAX_ARG_SIZE];
+    size_t pm_size;
     char export_desc_path[MAX_ARG_SIZE]; /* Path to save/read the exported descriptor file */
     char buf_info_path[MAX_ARG_SIZE];    /* Path to save/read the buffer information file */
 };
