@@ -234,122 +234,109 @@ doca_error_t create_dpu_buffer_and_mmap() {
 doca_error_t
 dma_copy_dpu(int thread_ID)
 {
-    /*struct program_core_objects state = {0};
-    struct doca_event event = {0};
-    struct doca_dma *dma_ctx;
-    struct doca_buf *dst_doca_buf;
-    struct doca_mmap *remote_mmap;*/
     doca_error_t result;
     struct timespec ts = {0};
     struct doca_event event = {0};
-    /*uint32_t max_chunks = 2;
-    char export_desc[1024] = {0};*/
 
-    struct doca_buf **src_doca_bufs = new struct doca_buf*[BENCHMARK_DEPTH];
+    //struct doca_buf **src_doca_bufs = new struct doca_buf*[BENCHMARK_DEPTH];
+    struct doca_buf *src_doca_bufs;
     struct doca_dma_job_memcpy* dma_jobs = new struct doca_dma_job_memcpy[BENCHMARK_DEPTH];
     char* local_remote_addr = remote_addr + (remote_addr_len / BENCHMARK_THREAD_NUM * thread_ID);
     size_t total_blocks = remote_addr_len / BENCHMARK_THREAD_NUM / BENCHMARK_BLOCK_SIZE;
 
-    for(int blk_num = 0; blk_num < BENCHMARK_OP_NUM; blk_num += BENCHMARK_DEPTH){
+    int pending_request = 0;
+    int finished = 0;
+    bool last = false;
+
+    for(int blk_num = 0; blk_num < BENCHMARK_OP_NUM; blk_num++){
         // init buffer
-        for(int i = 0; i < BENCHMARK_DEPTH; i++){
-            /* get_remote_block */
-            unsigned int blk_no = blk_num + i;
-            if (randomIO) {
-                blk_no = hash::hash_funcs[0](&blk_no, sizeof(int), f_seed);
+        if (blk_num == BENCHMARK_OP_NUM - 1) last = true;
+        struct doca_buf *src_doca_bufs;
+        unsigned int blk_no = blk_num;
+        if (randomIO) {
+            blk_no = hash::hash_funcs[0](&blk_no, sizeof(int), f_seed);
+        }
+        blk_no = blk_no % total_blocks;
+        char* target_remote_buffer = local_remote_addr + blk_no * BENCHMARK_BLOCK_SIZE;
+        assert(target_remote_buffer < remote_addr + remote_addr_len);
+        /* Construct DOCA buffer for each address range */
+        //result = doca_buf_inventory_buf_by_addr(state.buf_inv, remote_mmap, target_remote_buffer, BENCHMARK_BLOCK_SIZE, &src_doca_bufs[i]);
+        result = doca_buf_inventory_buf_by_addr(state.buf_inv, remote_mmap, local_remote_addr, remote_addr_len / BENCHMARK_THREAD_NUM, &src_doca_bufs);
+        if (result != DOCA_SUCCESS) {
+            DOCA_LOG_ERR("Unable to acquire DOCA buffer representing remote buffer: %s",
+                         doca_get_error_string(result));
+            doca_mmap_destroy(remote_mmap);
+            for (int i = 0; i < BENCHMARK_THREAD_NUM; ++i) {
+                free(dpu_buffers[i]);
             }
-            blk_no = blk_no % total_blocks;
-            char* target_remote_buffer = local_remote_addr + blk_no * BENCHMARK_BLOCK_SIZE;
-            assert(target_remote_buffer < remote_addr + remote_addr_len);
-            /* Construct DOCA buffer for each address range */
-            //result = doca_buf_inventory_buf_by_addr(state.buf_inv, remote_mmap, target_remote_buffer, BENCHMARK_BLOCK_SIZE, &src_doca_bufs[i]);
-            result = doca_buf_inventory_buf_by_addr(state.buf_inv, remote_mmap, local_remote_addr, remote_addr_len / BENCHMARK_THREAD_NUM, &src_doca_bufs[i]);
-            if (result != DOCA_SUCCESS) {
-                DOCA_LOG_ERR("Unable to acquire DOCA buffer representing remote buffer: %s",
-                            doca_get_error_string(result));
-                doca_mmap_destroy(remote_mmap);
-                for (int i = 0; i < BENCHMARK_THREAD_NUM; ++i) {
-                    free(dpu_buffers[i]);
-                }
-                delete[] dpu_buffers;
-                dma_cleanup(&state, dma_ctx);
-                return result;
-            }
-
-            /* Construct DMA job */
-            dma_jobs[i].base.type = DOCA_DMA_JOB_MEMCPY;
-            dma_jobs[i].base.flags = DOCA_JOB_FLAGS_NONE;
-            dma_jobs[i].base.ctx = state.ctx;
-            if(BENCHMARK_TYPE_READ == true){
-                // local dram buffer
-                dma_jobs[i].dst_buff = dst_doca_buf[thread_ID];
-                // host pm buffer
-                dma_jobs[i].src_buff = src_doca_bufs[i];
-                /* Set data position in src_buff */
-                result = doca_buf_set_data(src_doca_bufs[i], target_remote_buffer, BENCHMARK_BLOCK_SIZE);
-            }else{
-                dma_jobs[i].dst_buff = src_doca_bufs[i];
-                dma_jobs[i].src_buff = dst_doca_buf[thread_ID];
-                /* Set data position in src_buff */
-                result = doca_buf_set_data(dst_doca_buf[thread_ID], dpu_buffers[thread_ID], BENCHMARK_BLOCK_SIZE);
-            }
-
-
-            if (result != DOCA_SUCCESS) {
-                DOCA_LOG_ERR("Failed to set data for DOCA buffer: %s", doca_get_error_string(result));
-                return result;
-            }
+            delete[] dpu_buffers;
+            dma_cleanup(&state, dma_ctx);
+            return result;
+        }
+        /* Construct DMA job */
+        struct doca_dma_job_memcpy dma_jobs;
+        dma_jobs.base.type = DOCA_DMA_JOB_MEMCPY;
+        dma_jobs.base.flags = DOCA_JOB_FLAGS_NONE;
+        dma_jobs.base.ctx = state.ctx;
+        dma_jobs.base.user_data.ptr = (void*) src_doca_bufs;
+        if(BENCHMARK_TYPE_READ == true){
+            // local dram buffer
+            dma_jobs.dst_buff = dst_doca_buf[thread_ID];
+            // host pm buffer
+            dma_jobs.src_buff = src_doca_bufs;
+            /* Set data position in src_buff */
+            result = doca_buf_set_data(src_doca_bufs, target_remote_buffer, BENCHMARK_BLOCK_SIZE);
+        }else{
+            dma_jobs.dst_buff = src_doca_bufs;
+            dma_jobs.src_buff = dst_doca_buf[thread_ID];
+            /* Set data position in src_buff */
+            result = doca_buf_set_data(dst_doca_buf[thread_ID], dpu_buffers[thread_ID], BENCHMARK_BLOCK_SIZE);
         }
 
-        // submit request
-        for(int i = 0;i < BENCHMARK_DEPTH;i++){
-            /* Enqueue DMA job */
-            result = doca_workq_submit(state.workq, &dma_jobs[i].base);
-            if (result != DOCA_SUCCESS) {
-                DOCA_LOG_ERR("Failed to submit DMA job: %s", doca_get_error_string(result));
-                doca_buf_refcount_rm(dst_doca_buf[thread_ID], NULL);
-                doca_buf_refcount_rm(src_doca_bufs[i], NULL);
-                doca_mmap_destroy(remote_mmap);
-                for (int i = 0; i < BENCHMARK_THREAD_NUM; ++i) {
-                    free(dpu_buffers[i]);
-                }
-                delete[] dpu_buffers;
-                dma_cleanup(&state, dma_ctx);
-                return result;
-            }
+        if (result != DOCA_SUCCESS) {
+            DOCA_LOG_ERR("Failed to set data for DOCA buffer: %s", doca_get_error_string(result));
+            return result;
         }
-        int total_completed = 0;
-        for(int i=0; total_completed < BENCHMARK_DEPTH; i++){
-            /* Wait for job completion */
-            while ((result = doca_workq_progress_retrieve(state.workq, &event, DOCA_WORKQ_RETRIEVE_FLAGS_NONE)) ==
-                DOCA_ERROR_AGAIN) {
-                ts.tv_nsec = SLEEP_IN_NANOS;
-                nanosleep(&ts, &ts);
-            }
 
-            if (result != DOCA_SUCCESS) {
-                DOCA_LOG_ERR("Failed to retrieve DMA job: %s", doca_get_error_string(result));
-                // return result;
+        // submit
+        result = doca_workq_submit(state.workq, &dma_jobs.base);
+        if (result != DOCA_SUCCESS) {
+            DOCA_LOG_ERR("Failed to submit DMA job: %s", doca_get_error_string(result));
+            doca_buf_refcount_rm(dst_doca_buf[thread_ID], NULL);
+            doca_buf_refcount_rm(src_doca_bufs, NULL);
+            doca_mmap_destroy(remote_mmap);
+            for (int i = 0; i < BENCHMARK_THREAD_NUM; ++i) {
+                free(dpu_buffers[i]);
             }
+            delete[] dpu_buffers;
+            dma_cleanup(&state, dma_ctx);
+            return result;
+        }
+        pending_request++;
 
-            /* event result is valid */
-            result = (doca_error_t)event.result.u64;
-            if (result != DOCA_SUCCESS) {
-                DOCA_LOG_ERR("DMA job event returned unsuccessfully: %s", doca_get_error_string(result));
-                // return result;
+        // poll
+        do {
+            result = doca_workq_progress_retrieve(state.workq, &event, DOCA_WORKQ_RETRIEVE_FLAGS_NONE);
+            if (result == DOCA_SUCCESS) {
+                pending_request--;
+                finished++;
+                result = (doca_error_t)event.result.u64;
+                if (result != DOCA_SUCCESS) {
+                    DOCA_LOG_ERR("DMA job event returned unsuccessfully: %s", doca_get_error_string(result));
+                    // return result;
+                }
+                struct doca_buf *old_src_buf = (struct doca_buf*)event.user_data.ptr;
+                if (doca_buf_refcount_rm(old_src_buf, NULL) != DOCA_SUCCESS)
+                    DOCA_LOG_ERR("Failed to remove DOCA source buffer reference count");
+
+            } else if (result == DOCA_ERROR_AGAIN) {
+                // nothing
             } else {
-                total_completed++;
+                DOCA_LOG_ERR("Failed to retrieve DMA job: %s", doca_get_error_string(result));
+                break;
             }
-        }
+        } while ((!last && pending_request >= BENCHMARK_DEPTH) | (last && finished < BENCHMARK_OP_NUM));
 
-        for (int i = 0; i < BENCHMARK_DEPTH; ++i) {
-            if (doca_buf_refcount_rm(src_doca_bufs[i], NULL) != DOCA_SUCCESS)
-                DOCA_LOG_ERR("Failed to remove DOCA source buffer reference count");
-        }
-
-        // DOCA_LOG_INFO("Remote DMA copy was done Successfully");
-        // dpu_buffer[dst_buffer_size - 1] = '\0';
-        // DOCA_LOG_INFO("Memory content: %s", dpu_buffer);
     }
     if (doca_buf_refcount_rm(dst_doca_buf[thread_ID], NULL) != DOCA_SUCCESS)
         DOCA_LOG_ERR("Failed to remove DOCA destination buffer reference count");
