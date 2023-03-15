@@ -236,6 +236,7 @@ dma_copy_dpu(doca_dma_context* ctx, int thread_ID)
     //struct doca_buf **src_doca_bufs = new struct doca_buf*[BENCHMARK_DEPTH];
     struct doca_buf *src_doca_bufs;
     struct doca_dma_job_memcpy* dma_jobs = new struct doca_dma_job_memcpy[BENCHMARK_DEPTH];
+    int local_ops = BENCHMARK_OP_NUM / BENCHMARK_THREAD_NUM;
     char* local_remote_addr = remote_addr + (remote_addr_len / BENCHMARK_THREAD_NUM * thread_ID);
     size_t total_blocks = remote_addr_len / BENCHMARK_THREAD_NUM / BENCHMARK_BLOCK_SIZE;
 
@@ -243,9 +244,9 @@ dma_copy_dpu(doca_dma_context* ctx, int thread_ID)
     int finished = 0;
     bool last = false;
 
-    for(int blk_num = 0; blk_num < BENCHMARK_OP_NUM; blk_num++){
+    for(int blk_num = 0; blk_num < local_ops; blk_num++){
         // init buffer
-        if (blk_num == BENCHMARK_OP_NUM - 1) last = true;
+        if (blk_num == local_ops - 1) last = true;
         struct doca_buf *src_doca_bufs;
         unsigned int blk_no = blk_num;
         if (randomIO) {
