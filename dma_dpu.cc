@@ -236,7 +236,7 @@ dma_copy_dpu(doca_dma_context* ctx, int thread_ID)
     //struct doca_buf **src_doca_bufs = new struct doca_buf*[BENCHMARK_DEPTH];
     struct doca_buf *src_doca_bufs;
     struct doca_dma_job_memcpy* dma_jobs = new struct doca_dma_job_memcpy[BENCHMARK_DEPTH];
-    int local_ops = BENCHMARK_OP_NUM / BENCHMARK_THREAD_NUM;
+    uint64_t local_ops = BENCHMARK_OP_NUM / BENCHMARK_THREAD_NUM;
     char* local_remote_addr = remote_addr + (remote_addr_len / BENCHMARK_THREAD_NUM * thread_ID);
     size_t total_blocks = remote_addr_len / BENCHMARK_THREAD_NUM / BENCHMARK_BLOCK_SIZE;
 
@@ -256,8 +256,8 @@ dma_copy_dpu(doca_dma_context* ctx, int thread_ID)
         char* target_remote_buffer = local_remote_addr + blk_no * BENCHMARK_BLOCK_SIZE;
         assert(target_remote_buffer < remote_addr + remote_addr_len);
         /* Construct DOCA buffer for each address range */
-        //result = doca_buf_inventory_buf_by_addr(state.buf_inv, remote_mmap, target_remote_buffer, BENCHMARK_BLOCK_SIZE, &src_doca_bufs[i]);
-        result = doca_buf_inventory_buf_by_addr(ctx->state.buf_inv, ctx->remote_mmap, local_remote_addr, remote_addr_len / BENCHMARK_THREAD_NUM, &src_doca_bufs);
+        result = doca_buf_inventory_buf_by_addr(ctx->state.buf_inv, ctx->remote_mmap, target_remote_buffer, BENCHMARK_BLOCK_SIZE, &src_doca_bufs);
+        //result = doca_buf_inventory_buf_by_addr(ctx->state.buf_inv, ctx->remote_mmap, local_remote_addr, remote_addr_len / BENCHMARK_THREAD_NUM, &src_doca_bufs);
         if (result != DOCA_SUCCESS) {
             DOCA_LOG_ERR("Unable to acquire DOCA buffer representing remote buffer: %s",
                          doca_get_error_string(result));
@@ -325,7 +325,7 @@ dma_copy_dpu(doca_dma_context* ctx, int thread_ID)
                 DOCA_LOG_ERR("Failed to retrieve DMA job: %s", doca_get_error_string(result));
                 break;
             }
-        } while ((!last && pending_request >= BENCHMARK_DEPTH) | (last && finished < BENCHMARK_OP_NUM));
+        } while ((!last && pending_request >= BENCHMARK_DEPTH) | (last && finished < local_ops));
 
     }
     if (doca_buf_refcount_rm(ctx->dst_doca_buf, NULL) != DOCA_SUCCESS)
