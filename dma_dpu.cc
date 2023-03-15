@@ -40,7 +40,7 @@ DOCA_LOG_REGISTER(DMA_COPY_DPU::MAIN);
 #define RECV_BUF_SIZE 256		/* Buffer which contains config information */
 
 #define BENCHMARK_TYPE_READ false /* true: read, false: write */
-#define BENCHMARK_THREAD_NUM 1
+#define BENCHMARK_THREAD_NUM 4
 #define BENCHMARK_DEPTH 64
 
 const uint64_t BENCHMARK_OP_NUM = 1000000;
@@ -49,15 +49,22 @@ const uint64_t BENCHMARK_BLOCK_SIZE = 16;
 #define f_seed 0xc70697UL
 #define randomIO false
 
-struct program_core_objects state = {0};
+struct doca_dma_context {
+    struct program_core_objects state = {0};
+    struct doca_dma *dma_ctx;
+    struct doca_mmap *remote_mmap;
+    char* dpu_buffer;
+    struct doca_buf* dst_doca_buf;
+} thread_ctxs[BENCHMARK_THREAD_NUM];
+
+/*struct program_core_objects state = {0};
 struct doca_dma *dma_ctx;
 struct doca_buf **dst_doca_buf;
 struct doca_mmap *remote_mmap;
-struct doca_buf_inventory *remote_buf_inv;
-struct doca_buf *remote_doca_buf;
+char** dpu_buffers;*/
 char *remote_addr = NULL;
-char** dpu_buffers;
-size_t dst_buffer_size, remote_addr_len = 0, export_desc_len = 0;
+char export_desc[1024] = {0};
+size_t remote_addr_len = 0, export_desc_len = 0;
 
 /*
  * Saves export descriptor and buffer information content into memory buffers
@@ -146,79 +153,67 @@ save_config_info_to_buffers(const char *export_desc_file_path, const char *buffe
     return DOCA_SUCCESS;
 }
 
-doca_error_t init_dpu_side_buffer (char *export_desc_file_path, char *buffer_info_file_path, struct doca_pci_bdf *pcie_addr) {
+doca_error_t init_doca_dma_and_host_mmap (doca_dma_context* ctx, char *export_desc_file_path, char *buffer_info_file_path, struct doca_pci_bdf *pcie_addr) {
     doca_error_t result;
-    result = doca_dma_create(&dma_ctx);
-    uint32_t max_chunks = 2048;
-    char export_desc[1024] = {0};
+    result = doca_dma_create(&ctx->dma_ctx);
+    uint32_t max_chunks = 1024;
     if (result != DOCA_SUCCESS) {
         DOCA_LOG_ERR("Unable to create DMA engine: %s", doca_get_error_string(result));
         return result;
     }
 
-    state.ctx = doca_dma_as_ctx(dma_ctx);
+    ctx->state.ctx = doca_dma_as_ctx(ctx->dma_ctx);
 
-    result = open_doca_device_with_pci(pcie_addr, &dma_jobs_is_supported, &state.dev);
+    result = open_doca_device_with_pci(pcie_addr, &dma_jobs_is_supported, &ctx->state.dev);
     if (result != DOCA_SUCCESS) {
-        doca_dma_destroy(dma_ctx);
+        doca_dma_destroy(ctx->dma_ctx);
         return result;
     }
 // what's max_chunks
-    result = init_core_objects(&state, DOCA_BUF_EXTENSION_NONE, WORKQ_DEPTH, max_chunks);
+    result = init_core_objects(&ctx->state, DOCA_BUF_EXTENSION_NONE, WORKQ_DEPTH, max_chunks);
     if (result != DOCA_SUCCESS) {
-        dma_cleanup(&state, dma_ctx);
+        dma_cleanup(&ctx->state, ctx->dma_ctx);
         return result;
     }
 
-    /* Copy all relevant information into local buffers */
-    save_config_info_to_buffers(export_desc_file_path, buffer_info_file_path, export_desc, &export_desc_len,
-                                &remote_addr, &remote_addr_len);
-
     /* Create a local DOCA mmap from exported data */
-    result = doca_mmap_create_from_export(NULL, (const void *)export_desc, export_desc_len, state.dev,
-                                          &remote_mmap);
+    result = doca_mmap_create_from_export(NULL, (const void *)export_desc, export_desc_len, ctx->state.dev,
+                                          &ctx->remote_mmap);
     if (result != DOCA_SUCCESS) {
         DOCA_LOG_ERR("Creating mmap from remote export failed: %s",
                      doca_get_error_string(result));
-        dma_cleanup(&state, dma_ctx);
+        dma_cleanup(&ctx->state, ctx->dma_ctx);
         return result;
     }
 
     return result;
 };
 
-doca_error_t create_dpu_buffer_and_mmap() {
+doca_error_t create_dpu_buffer_and_mmap(doca_dma_context* ctx) {
     doca_error_t result;
-    dpu_buffers = new char*[BENCHMARK_THREAD_NUM];
-    dst_doca_buf = new struct doca_buf*[BENCHMARK_THREAD_NUM];
-    for (int i = 0; i < BENCHMARK_THREAD_NUM; ++i) {
-        // create local dpu buffer
-        /* Copy the entire host buffer */
-        size_t dst_buffer_size = BENCHMARK_BLOCK_SIZE;
-        dpu_buffers[i] = (char *)malloc(dst_buffer_size);
-        if (dpu_buffers[i] == NULL) {
-            DOCA_LOG_ERR("Failed to allocate buffer memory");
-            dma_cleanup(&state, dma_ctx);
-            return DOCA_ERROR_NO_MEMORY;
-        }
+    size_t dst_buffer_size = BENCHMARK_BLOCK_SIZE;
+    ctx->dpu_buffer = (char *)malloc(dst_buffer_size);
+    if (ctx->dpu_buffer == NULL) {
+        DOCA_LOG_ERR("Failed to allocate buffer memory");
+        dma_cleanup(&ctx->state, ctx->dma_ctx);
+        return DOCA_ERROR_NO_MEMORY;
+    }
+    result = doca_mmap_populate(ctx->state.mmap, ctx->dpu_buffer, dst_buffer_size, PAGE_SIZE, NULL, NULL);
+    if (result != DOCA_SUCCESS) {
+        free(ctx->dpu_buffer);
+        dma_cleanup(&ctx->state, ctx->dma_ctx);
+        return result;
+    }
 
-        result = doca_mmap_populate(state.mmap, dpu_buffers[i], dst_buffer_size, PAGE_SIZE, NULL, NULL);
-        if (result != DOCA_SUCCESS) {
-            free(dpu_buffers[i]);
-            dma_cleanup(&state, dma_ctx);
-            return result;
-        }
-
-        /* Construct DOCA buffer for each address range */
-        result = doca_buf_inventory_buf_by_addr(state.buf_inv, state.mmap, dpu_buffers[i], dst_buffer_size, &dst_doca_buf[i]);
-        if (result != DOCA_SUCCESS) {
-            DOCA_LOG_ERR("Unable to acquire DOCA buffer representing destination buffer: %s",
-                         doca_get_error_string(result));
-            doca_mmap_destroy(remote_mmap);
-            free(dpu_buffers[i]);
-            dma_cleanup(&state, dma_ctx);
-            return result;
-        }
+    /* Construct DOCA buffer for each address range */
+    result = doca_buf_inventory_buf_by_addr(ctx->state.buf_inv, ctx->state.mmap, ctx->dpu_buffer, dst_buffer_size, &ctx->dst_doca_buf);
+    if (result != DOCA_SUCCESS) {
+        DOCA_LOG_ERR("Unable to acquire DOCA buffer representing destination buffer: %s",
+                     doca_get_error_string(result));
+        doca_mmap_destroy(ctx->remote_mmap);
+        free(ctx->dpu_buffer);
+        dma_cleanup(&ctx->state, ctx->dma_ctx);
+        return result;
     }
     return result;
 }
@@ -232,7 +227,7 @@ doca_error_t create_dpu_buffer_and_mmap() {
  * @return: DOCA_SUCCESS on success and DOCA_ERROR otherwise
  */
 doca_error_t
-dma_copy_dpu(int thread_ID)
+dma_copy_dpu(doca_dma_context* ctx, int thread_ID)
 {
     doca_error_t result;
     struct timespec ts = {0};
@@ -261,36 +256,33 @@ dma_copy_dpu(int thread_ID)
         assert(target_remote_buffer < remote_addr + remote_addr_len);
         /* Construct DOCA buffer for each address range */
         //result = doca_buf_inventory_buf_by_addr(state.buf_inv, remote_mmap, target_remote_buffer, BENCHMARK_BLOCK_SIZE, &src_doca_bufs[i]);
-        result = doca_buf_inventory_buf_by_addr(state.buf_inv, remote_mmap, local_remote_addr, remote_addr_len / BENCHMARK_THREAD_NUM, &src_doca_bufs);
+        result = doca_buf_inventory_buf_by_addr(ctx->state.buf_inv, ctx->remote_mmap, local_remote_addr, remote_addr_len / BENCHMARK_THREAD_NUM, &src_doca_bufs);
         if (result != DOCA_SUCCESS) {
             DOCA_LOG_ERR("Unable to acquire DOCA buffer representing remote buffer: %s",
                          doca_get_error_string(result));
-            doca_mmap_destroy(remote_mmap);
-            for (int i = 0; i < BENCHMARK_THREAD_NUM; ++i) {
-                free(dpu_buffers[i]);
-            }
-            delete[] dpu_buffers;
-            dma_cleanup(&state, dma_ctx);
+            doca_mmap_destroy(ctx->remote_mmap);
+            free(ctx->dpu_buffer);
+            dma_cleanup(&ctx->state, ctx->dma_ctx);
             return result;
         }
         /* Construct DMA job */
         struct doca_dma_job_memcpy dma_jobs;
         dma_jobs.base.type = DOCA_DMA_JOB_MEMCPY;
         dma_jobs.base.flags = DOCA_JOB_FLAGS_NONE;
-        dma_jobs.base.ctx = state.ctx;
+        dma_jobs.base.ctx = ctx->state.ctx;
         dma_jobs.base.user_data.ptr = (void*) src_doca_bufs;
         if(BENCHMARK_TYPE_READ == true){
             // local dram buffer
-            dma_jobs.dst_buff = dst_doca_buf[thread_ID];
+            dma_jobs.dst_buff = ctx->dst_doca_buf;
             // host pm buffer
             dma_jobs.src_buff = src_doca_bufs;
             /* Set data position in src_buff */
             result = doca_buf_set_data(src_doca_bufs, target_remote_buffer, BENCHMARK_BLOCK_SIZE);
         }else{
             dma_jobs.dst_buff = src_doca_bufs;
-            dma_jobs.src_buff = dst_doca_buf[thread_ID];
+            dma_jobs.src_buff = ctx->dst_doca_buf;
             /* Set data position in src_buff */
-            result = doca_buf_set_data(dst_doca_buf[thread_ID], dpu_buffers[thread_ID], BENCHMARK_BLOCK_SIZE);
+            result = doca_buf_set_data(ctx->dst_doca_buf, ctx->dpu_buffer, BENCHMARK_BLOCK_SIZE);
         }
 
         if (result != DOCA_SUCCESS) {
@@ -299,24 +291,21 @@ dma_copy_dpu(int thread_ID)
         }
 
         // submit
-        result = doca_workq_submit(state.workq, &dma_jobs.base);
+        result = doca_workq_submit(ctx->state.workq, &dma_jobs.base);
         if (result != DOCA_SUCCESS) {
             DOCA_LOG_ERR("Failed to submit DMA job: %s", doca_get_error_string(result));
-            doca_buf_refcount_rm(dst_doca_buf[thread_ID], NULL);
+            doca_buf_refcount_rm(ctx->dst_doca_buf, NULL);
             doca_buf_refcount_rm(src_doca_bufs, NULL);
-            doca_mmap_destroy(remote_mmap);
-            for (int i = 0; i < BENCHMARK_THREAD_NUM; ++i) {
-                free(dpu_buffers[i]);
-            }
-            delete[] dpu_buffers;
-            dma_cleanup(&state, dma_ctx);
+            doca_mmap_destroy(ctx->remote_mmap);
+            free(ctx->dpu_buffer);
+            dma_cleanup(&ctx->state, ctx->dma_ctx);
             return result;
         }
         pending_request++;
 
         // poll
         do {
-            result = doca_workq_progress_retrieve(state.workq, &event, DOCA_WORKQ_RETRIEVE_FLAGS_NONE);
+            result = doca_workq_progress_retrieve(ctx->state.workq, &event, DOCA_WORKQ_RETRIEVE_FLAGS_NONE);
             if (result == DOCA_SUCCESS) {
                 pending_request--;
                 finished++;
@@ -338,7 +327,7 @@ dma_copy_dpu(int thread_ID)
         } while ((!last && pending_request >= BENCHMARK_DEPTH) | (last && finished < BENCHMARK_OP_NUM));
 
     }
-    if (doca_buf_refcount_rm(dst_doca_buf[thread_ID], NULL) != DOCA_SUCCESS)
+    if (doca_buf_refcount_rm(ctx->dst_doca_buf, NULL) != DOCA_SUCCESS)
         DOCA_LOG_ERR("Failed to remove DOCA destination buffer reference count");
 
     delete[] src_doca_bufs;
@@ -392,23 +381,28 @@ main(int argc, char **argv)
         return EXIT_FAILURE;
     }
 
-    result = init_dpu_side_buffer(dma_conf.export_desc_path, dma_conf.buf_info_path, &pcie_dev);
-    if (result != DOCA_SUCCESS) {
-        DOCA_LOG_ERR("Init DPU buffer failed:%s\n", doca_get_error_string(result));
-        return EXIT_FAILURE;
-    }
-    result = create_dpu_buffer_and_mmap();
-    if (result != DOCA_SUCCESS) {
-        DOCA_LOG_ERR("Create DPU buffer and mmap failed:%s\n", doca_get_error_string(result));
-        return EXIT_FAILURE;
-    }
+    /* Copy all relevant information into local buffers */
+    save_config_info_to_buffers(dma_conf.export_desc_path, dma_conf.buf_info_path, export_desc, &export_desc_len,
+                                &remote_addr, &remote_addr_len);
 
+    for (int i = 0; i < BENCHMARK_THREAD_NUM; ++i) {
+        result = init_doca_dma_and_host_mmap(&thread_ctxs[i], dma_conf.export_desc_path, dma_conf.buf_info_path, &pcie_dev);
+        if (result != DOCA_SUCCESS) {
+            DOCA_LOG_ERR("Init DPU buffer failed:%s\n", doca_get_error_string(result));
+            return EXIT_FAILURE;
+        }
+        result = create_dpu_buffer_and_mmap(&thread_ctxs[i]);
+        if (result != DOCA_SUCCESS) {
+            DOCA_LOG_ERR("Create DPU buffer and mmap failed:%s\n", doca_get_error_string(result));
+            return EXIT_FAILURE;
+        }
+    }
     std::vector<std::thread> threads;
     threads.reserve(BENCHMARK_THREAD_NUM);
 
     auto start = std::chrono::high_resolution_clock::now();
     for(int i=0;i<BENCHMARK_THREAD_NUM;i++){
-        threads.emplace_back(dma_copy_dpu, i);
+        threads.emplace_back(dma_copy_dpu, &thread_ctxs[i], i);
     }
     for(int i=0;i<BENCHMARK_THREAD_NUM;i++){
         threads[i].join();
@@ -427,21 +421,15 @@ main(int argc, char **argv)
     // }
 
     /* Destroy remote memory map */
-    if (doca_mmap_destroy(remote_mmap) != DOCA_SUCCESS)
-        DOCA_LOG_ERR("Failed to destroy remote memory map");
-
+    for (int i = 0; i < BENCHMARK_THREAD_NUM; ++i) {
+        if (doca_mmap_destroy(thread_ctxs[i].remote_mmap) != DOCA_SUCCESS)
+            DOCA_LOG_ERR("Failed to destroy remote memory map");
+        /* Clean and destroy all relevant objects */
+        dma_cleanup(&thread_ctxs[i].state, thread_ctxs[i].dma_ctx);
+        free(thread_ctxs[i].dpu_buffer);
+    }
     /* Inform host that DMA operation is done */
     DOCA_LOG_INFO("Host sample can be closed, DMA copy ended");
-
-    /* Clean and destroy all relevant objects */
-    dma_cleanup(&state, dma_ctx);
-
-    //free(dpu_buffer);
-    for (int i = 0; i < BENCHMARK_THREAD_NUM; ++i) {
-        free(dpu_buffers[i]);
-    }
-    delete[] dpu_buffers;
-
     doca_argp_destroy();
 
     return EXIT_SUCCESS;
