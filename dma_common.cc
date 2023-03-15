@@ -100,8 +100,40 @@ size_callback(void *param, void *config)
     const char *txt = (char *)param;
     int txt_len = strnlen(txt, MAX_TXT_SIZE);
     size_t tmp = std::stoi(std::string(txt, txt_len));
-    DOCA_LOG_ERR("%lu", tmp);
     conf->pm_size = tmp * 1024 * 1024 * 1024UL;
+    return DOCA_SUCCESS;
+}
+
+static doca_error_t
+threads_num_callback(void *param, void *config)
+{
+    struct dma_config *conf = (struct dma_config *)config;
+    const char *txt = (char *)param;
+    int txt_len = strnlen(txt, MAX_TXT_SIZE);
+    size_t tmp = std::stoi(std::string(txt, txt_len));
+    conf->thread_num = tmp;
+    return DOCA_SUCCESS;
+}
+
+static doca_error_t
+block_size_callback(void *param, void *config)
+{
+    struct dma_config *conf = (struct dma_config *)config;
+    const char *txt = (char *)param;
+    int txt_len = strnlen(txt, MAX_TXT_SIZE);
+    size_t tmp = std::stoi(std::string(txt, txt_len));
+    conf->block_size = tmp;
+    return DOCA_SUCCESS;
+}
+
+static doca_error_t
+depth_callback(void *param, void *config)
+{
+    struct dma_config *conf = (struct dma_config *)config;
+    const char *txt = (char *)param;
+    int txt_len = strnlen(txt, MAX_TXT_SIZE);
+    size_t tmp = std::stoi(std::string(txt, txt_len));
+    conf->depth = tmp;
     return DOCA_SUCCESS;
 }
 
@@ -173,6 +205,7 @@ register_dma_params()
     doca_error_t result;
     struct doca_argp_param *pci_address_param, /**cpy_txt_param,*/ *export_desc_path_param, *buf_info_path_param;
     struct doca_argp_param *pm_addr_param, *pm_size_param;
+    struct doca_argp_param *thread_num, *block_size, *depth;
 
     /* Create and register PCI address param */
     result = doca_argp_param_create(&pci_address_param);
@@ -237,6 +270,57 @@ register_dma_params()
     doca_argp_param_set_callback(pm_size_param, size_callback);
     doca_argp_param_set_type(pm_size_param, DOCA_ARGP_TYPE_STRING);
     result = doca_argp_register_param(pm_size_param);
+    if (result != DOCA_SUCCESS) {
+        DOCA_LOG_ERR("Failed to register program param: %s", doca_get_error_string(result));
+        return result;
+    }
+
+    result = doca_argp_param_create(&thread_num);
+    if (result != DOCA_SUCCESS) {
+        DOCA_LOG_ERR("Failed to create ARGP param: %s", doca_get_error_string(result));
+        return result;
+    }
+    doca_argp_param_set_short_name(thread_num, "t");
+    doca_argp_param_set_long_name(thread_num, "threads");
+    doca_argp_param_set_description(thread_num,
+                                    "number of benchmark threads (relevant only on the DPU side)");
+    doca_argp_param_set_callback(thread_num, threads_num_callback);
+    doca_argp_param_set_type(thread_num, DOCA_ARGP_TYPE_STRING);
+    result = doca_argp_register_param(thread_num);
+    if (result != DOCA_SUCCESS) {
+        DOCA_LOG_ERR("Failed to register program param: %s", doca_get_error_string(result));
+        return result;
+    }
+
+    result = doca_argp_param_create(&block_size);
+    if (result != DOCA_SUCCESS) {
+        DOCA_LOG_ERR("Failed to create ARGP param: %s", doca_get_error_string(result));
+        return result;
+    }
+    doca_argp_param_set_short_name(block_size, "B");
+    doca_argp_param_set_long_name(block_size, "block_size");
+    doca_argp_param_set_description(block_size,
+                                    "block size of I/O (relevant only on the DPU side)");
+    doca_argp_param_set_callback(block_size, block_size_callback);
+    doca_argp_param_set_type(block_size, DOCA_ARGP_TYPE_STRING);
+    result = doca_argp_register_param(block_size);
+    if (result != DOCA_SUCCESS) {
+        DOCA_LOG_ERR("Failed to register program param: %s", doca_get_error_string(result));
+        return result;
+    }
+
+    result = doca_argp_param_create(&depth);
+    if (result != DOCA_SUCCESS) {
+        DOCA_LOG_ERR("Failed to create ARGP param: %s", doca_get_error_string(result));
+        return result;
+    }
+    doca_argp_param_set_short_name(depth, "D");
+    doca_argp_param_set_long_name(depth, "depth");
+    doca_argp_param_set_description(depth,
+                                    "number of outstanding requests (relevant only on the DPU side)");
+    doca_argp_param_set_callback(depth, depth_callback);
+    doca_argp_param_set_type(depth, DOCA_ARGP_TYPE_STRING);
+    result = doca_argp_register_param(depth);
     if (result != DOCA_SUCCESS) {
         DOCA_LOG_ERR("Failed to register program param: %s", doca_get_error_string(result));
         return result;

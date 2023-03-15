@@ -40,11 +40,11 @@ DOCA_LOG_REGISTER(DMA_COPY_DPU::MAIN);
 #define RECV_BUF_SIZE 256		/* Buffer which contains config information */
 
 #define BENCHMARK_TYPE_READ false /* true: read, false: write */
-#define BENCHMARK_THREAD_NUM 4
-#define BENCHMARK_DEPTH 64
 
-const uint64_t BENCHMARK_OP_NUM = 1000000;
-const uint64_t BENCHMARK_BLOCK_SIZE = 16;
+const uint64_t BENCHMARK_OP_NUM = 10000000;
+uint64_t BENCHMARK_THREAD_NUM;
+uint64_t BENCHMARK_DEPTH;
+uint64_t BENCHMARK_BLOCK_SIZE;
 
 #define f_seed 0xc70697UL
 #define randomIO false
@@ -55,7 +55,7 @@ struct doca_dma_context {
     struct doca_mmap *remote_mmap;
     char* dpu_buffer;
     struct doca_buf* dst_doca_buf;
-} thread_ctxs[BENCHMARK_THREAD_NUM];
+} *thread_ctxs;
 
 /*struct program_core_objects state = {0};
 struct doca_dma *dma_ctx;
@@ -153,7 +153,7 @@ save_config_info_to_buffers(const char *export_desc_file_path, const char *buffe
     return DOCA_SUCCESS;
 }
 
-doca_error_t init_doca_dma_and_host_mmap (doca_dma_context* ctx, char *export_desc_file_path, char *buffer_info_file_path, struct doca_pci_bdf *pcie_addr) {
+doca_error_t init_doca_dma_and_host_mmap (doca_dma_context* ctx, struct doca_pci_bdf *pcie_addr, int depth) {
     doca_error_t result;
     result = doca_dma_create(&ctx->dma_ctx);
     uint32_t max_chunks = 1024;
@@ -170,7 +170,7 @@ doca_error_t init_doca_dma_and_host_mmap (doca_dma_context* ctx, char *export_de
         return result;
     }
 // what's max_chunks
-    result = init_core_objects(&ctx->state, DOCA_BUF_EXTENSION_NONE, WORKQ_DEPTH, max_chunks);
+    result = init_core_objects(&ctx->state, DOCA_BUF_EXTENSION_NONE, depth, max_chunks);
     if (result != DOCA_SUCCESS) {
         dma_cleanup(&ctx->state, ctx->dma_ctx);
         return result;
@@ -380,13 +380,18 @@ main(int argc, char **argv)
         DOCA_LOG_ERR("Failed to parse pci address: %s", doca_get_error_string(result));
         return EXIT_FAILURE;
     }
+    BENCHMARK_THREAD_NUM = dma_conf.thread_num;
+    BENCHMARK_DEPTH = dma_conf.depth;
+    BENCHMARK_BLOCK_SIZE = dma_conf.block_size;
+
+    thread_ctxs = new doca_dma_context[BENCHMARK_THREAD_NUM];
 
     /* Copy all relevant information into local buffers */
     save_config_info_to_buffers(dma_conf.export_desc_path, dma_conf.buf_info_path, export_desc, &export_desc_len,
                                 &remote_addr, &remote_addr_len);
 
     for (int i = 0; i < BENCHMARK_THREAD_NUM; ++i) {
-        result = init_doca_dma_and_host_mmap(&thread_ctxs[i], dma_conf.export_desc_path, dma_conf.buf_info_path, &pcie_dev);
+        result = init_doca_dma_and_host_mmap(&thread_ctxs[i], &pcie_dev, dma_conf.depth);
         if (result != DOCA_SUCCESS) {
             DOCA_LOG_ERR("Init DPU buffer failed:%s\n", doca_get_error_string(result));
             return EXIT_FAILURE;
@@ -428,6 +433,7 @@ main(int argc, char **argv)
         dma_cleanup(&thread_ctxs[i].state, thread_ctxs[i].dma_ctx);
         free(thread_ctxs[i].dpu_buffer);
     }
+    delete[] thread_ctxs;
     /* Inform host that DMA operation is done */
     DOCA_LOG_INFO("Host sample can be closed, DMA copy ended");
     doca_argp_destroy();

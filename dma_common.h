@@ -34,6 +34,9 @@ struct dma_config {
     size_t pm_size;
     char export_desc_path[MAX_ARG_SIZE]; /* Path to save/read the exported descriptor file */
     char buf_info_path[MAX_ARG_SIZE];    /* Path to save/read the buffer information file */
+    int thread_num;
+    int depth;
+    int block_size;
 };
 
 /*
